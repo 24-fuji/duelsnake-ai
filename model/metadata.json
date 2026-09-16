@@ -1,8 +1,8 @@
 {
   "model-version": "1.0.0",
-  "grid-size": 15,
+  "grid-size": 16,
   "time-limit": 30,
-  "input-shape": [1, 8, 15, 15],
+  "input-shape": [1, 8, 16, 16],
   "actions": ["up", "down", "left", "right", "speed-up", "activate-item"],
   "difficulty-levels": {
     "easy": { "random-path-rate": 0.6 },

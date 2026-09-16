@@ -7,4 +7,6 @@ edition = "2021"
 rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# 強化学習・ONNX出力用ライブラリ（必要に応じて tch や tract を追加）
+ctrlc = "3.4"                  # Ctrl+C ハンドリング用
+chrono = "0.4"                 # タイムスタンプ生成用
+# 強化学習・ONNX操作用ライブラリ (例: tch, tract 等)
