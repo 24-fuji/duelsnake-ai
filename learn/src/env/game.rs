@@ -1,5 +1,8 @@
 use super::snake::*;
 
+// フィールドサイズを 16x16 に固定
+pub const GRID_SIZE: i32 = 16;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ItemType {
     NormalApple,  // +1
@@ -11,24 +14,23 @@ pub enum ItemType {
 }
 
 pub struct GameEnv {
-    pub grid_size: i32,
     pub player_snake: Snake,
     pub ai_snake: Snake,
     pub time_remaining: f32, // 30秒
 }
 
 impl GameEnv {
-    pub fn new(grid_size: i32) -> Self {
+    pub fn new() -> Self {
         Self {
-            grid_size,
+            // 16x16の領域内に初期配置（プレイヤー: 左上付近, AI: 右下付近）
             player_snake: Snake::new(2, 2),
-            ai_snake: Snake::new(grid_size - 3, grid_size - 3),
+            ai_snake: Snake::new(GRID_SIZE - 3, GRID_SIZE - 3),
             time_remaining: 30.0,
         }
     }
 
     pub fn step(&mut self, dt: f32) {
         self.time_remaining -= dt;
-        // ゲーム進行・アイテム判定・判定処理
+        // ゲーム進行・壁衝突判定 (0 <= x < GRID_SIZE, 0 <= y < GRID_SIZE)
     }
 }

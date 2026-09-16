@@ -25,30 +25,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("No valid existing model found. Training from scratch...");
     }
 
-    let mut env = GameEnv::new(15);
+    let mut env = GameEnv::new();
     let max_episodes = 10000;
 
     // --- 3. 学習メインループ ---
     for episode in 1..=max_episodes {
-        // Ctrl+C が押されていたら現エピソード完了時点でループを脱出
         if !running.load(Ordering::SeqCst) {
             println!("Stopping training gracefully at episode {}...", episode - 1);
             break;
         }
 
-        // 1エピソードの実行（ゲームオーバーまで）
         let mut episode_over = false;
         while !episode_over {
             env.step(0.1);
             
-            // ゲームオーバーまたは30秒経過の判定
             if env.time_remaining <= 0.0 || !env.player_snake.is_alive || !env.ai_snake.is_alive {
                 episode_over = true;
             }
         }
 
         // 環境のリセット
-        env = GameEnv::new(15);
+        env = GameEnv::new();
     }
 
     // --- 4. 学習結果の保存処理 ---
