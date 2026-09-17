@@ -1,0 +1,31 @@
+grid:
+  width: 16
+  height: 16
+  time_limit_seconds: 30.0
+
+snake:
+  initial_length: 3
+  normal_speed_interval_sec: 0.2
+  boost_speed_interval_sec: 0.1
+  boost_duration_sec: 5.0
+  boost_cooldown_sec: 7.5
+
+items:
+  apple_respawn_delay_sec: 0.6
+  special_respawn_delay_sec: 1.0
+  jam_block_delay_sec: 0.2
+  max_apples: 3
+  max_poison: 2
+  normal_apple_score: 1
+  gold_apple_score: 3
+  poison_apple_score: -1
+  normal_apple_grow: 1
+  gold_apple_grow: 3
+  poison_apple_grow: -2
+
+agent:
+  learning_rate: 0.001
+  epsilon: 0.1
+  num_actions: 5
+  input_channels: 8
+  random_action_bound: 5

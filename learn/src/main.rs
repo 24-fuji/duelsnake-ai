@@ -1,63 +1,134 @@
+mod agent;
+mod config;
 mod env;
-mod export;
+mod memory;
 
+use agent::DQNAgent;
+use config::GameConfig;
 use env::game::GameEnv;
+use env::snake::Direction;
+use env::tensor::field_to_tensor;
+
+use chrono::Local;
+use std::env as std_env;
+use std::fs;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting DuelSnake-AI RL Training...");
+    let args: Vec<String> = std_env::args().collect();
+    let mode = args
+        .iter()
+        .position(|r| r == "--mode")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .unwrap_or("half-memory");
 
-    // --- 1. Ctrl+C フラグの設定 ---
+    println!("DuelSnake-AI RL Training Started");
+    let config = GameConfig::load("../model/config.yaml")?;
+
+    let env_mem_bytes = std::mem::size_of::<GameEnv>();
+    let workers = memory::calculate_workers(mode, env_mem_bytes);
+    println!("Mode: {}, Active Workers: {}", mode, workers);
+
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
-
     ctrlc::set_handler(move || {
-        println!("\n[Interrupt] Ctrl+C received! Finishing the current episode before exit...");
+        println!("\n[SIGINT] 中断シグナルを受信。エピソード完了後にモデルを保存します...");
         r.store(false, Ordering::SeqCst);
     })?;
 
-    // --- 2. 既存モデルの読み込みチェック ---
-    if let Some(recent_model) = export::get_recent_model_path() {
-        println!("Found valid existing model: {}. Resuming training...", recent_model);
-        // TODO: ここでモデルのウェイトをロードする処理を呼び出す
-    } else {
-        println!("No valid existing model found. Training from scratch...");
-    }
+    let agent = DQNAgent::new(&config.agent);
+    let mut episode = 0;
 
-    let mut env = GameEnv::new();
-    let max_episodes = 10000;
+    while running.load(Ordering::SeqCst) {
+        episode += 1;
+        let mut game = GameEnv::new(config.clone());
 
-    // --- 3. 学習メインループ ---
-    for episode in 1..=max_episodes {
-        if !running.load(Ordering::SeqCst) {
-            println!("Stopping training gracefully at episode {}...", episode - 1);
-            break;
+        while game.time_remaining_steps > 0 && game.player_field.snake.is_alive {
+            let p_tensor = field_to_tensor(
+                &game.player_field,
+                config.grid.width as i64,
+                config.grid.height as i64,
+            );
+            let ai_tensor = field_to_tensor(
+                &game.ai_field,
+                config.grid.width as i64,
+                config.grid.height as i64,
+            );
+
+            let p_action = agent.select_action(
+                &p_tensor,
+                config.agent.epsilon,
+                config.agent.random_action_bound,
+            );
+            let ai_action = agent.select_action(
+                &ai_tensor,
+                config.agent.epsilon,
+                config.agent.random_action_bound,
+            );
+
+            let (p_dir, p_use) = parse_action(p_action, game.player_field.snake.dir);
+            let (ai_dir, ai_use) = parse_action(ai_action, game.ai_field.snake.dir);
+
+            game.step(p_dir, p_use, ai_dir, ai_use);
         }
 
-        let mut episode_over = false;
-        while !episode_over {
-            env.step(0.1);
-            
-            if env.time_remaining <= 0.0 || !env.player_snake.is_alive || !env.ai_snake.is_alive {
-                episode_over = true;
-            }
+        if episode % 100 == 0 {
+            println!(
+                "Completed Episode: {}, Player Score: {}",
+                episode, game.player_field.snake.score
+            );
         }
-
-        // 環境のリセット
-        env = GameEnv::new();
     }
 
-    // --- 4. 学習結果の保存処理 ---
-    println!("Exporting trained model...");
-    // 一時出力ファイルパスを渡してバックアップ＆recent更新を実行
-    let temp_output = "/tmp/temp-snake-model.onnx";
-    
-    // TODO: 実際のニューラルネットワークのパラメータを temp_output にエクスポートする処理
-    std::fs::write(temp_output, b"dummy onnx content")?; // デモ用のダミー書き込み
+    // --- 1. .pt モデルの保存（バックアップ ＋ recent） ---
+    println!("Saving trained model...");
+    fs::create_dir_all("../model/recent-model")?;
+    fs::create_dir_all("../model/models")?;
 
-    export::save_and_update_model(temp_output)?;
+    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let backup_path = format!("../model/models/snake-model-{}.pt", timestamp);
+    let recent_pt_path = "../model/recent-model/snake-model.pt";
+    let recent_onnx_path = "../model/recent-model/snake-model.onnx";
+
+    agent.vs.save(&backup_path)?;
+    agent.vs.save(recent_pt_path)?;
+
+    println!("Saved backup model: {}", backup_path);
+    println!("Updated recent model: {}", recent_pt_path);
+
+    // --- 2. 成果物 (.onnx) への変換処理 ---
+    println!("Converting recent model to ONNX format...");
+    let script_path = "../model/convert-to-onnx.py";
+
+    let status = Command::new("python3")
+        .arg(script_path)
+        .arg(recent_pt_path)
+        .arg(recent_onnx_path)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("Successfully generated ONNX model: {}", recent_onnx_path);
+        }
+        _ => {
+            eprintln!("Warning: Failed to convert model to ONNX. Ensure python3, torch, and script exist.");
+        }
+    }
 
     println!("Training session finished safely.");
     Ok(())
+}
+
+fn parse_action(action: i64, current_dir: Direction) -> (Direction, bool) {
+    match action {
+        0 => (Direction::Up, false),
+        1 => (Direction::Down, false),
+        2 => (Direction::Left, false),
+        3 => (Direction::Right, false),
+        4 => (current_dir, true),
+        _ => (current_dir, false),
+    }
 }
