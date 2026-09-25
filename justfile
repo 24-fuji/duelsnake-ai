@@ -13,6 +13,10 @@ train *ARGS:
 train-resume *ARGS:
     cd learn && cargo run --release -- --resume {{ARGS}}
 
+# 学習中の最新ログを表示し続ける (学習とは別の端末で実行する)
+train-watch:
+    tail -n 20 -f "$(ls -t log/train-*.log | head -n 1)"
+
 # 動作確認用の短い学習。model/ は上書きせず /tmp/duelsnake-smoke に出力する
 train-smoke:
     cd learn && cargo run --release -- --games 1000 --envs 16 --out-dir /tmp/duelsnake-smoke

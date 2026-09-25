@@ -97,7 +97,7 @@ pub struct TrainConfig {
     pub epsilon_end: f64,
     pub epsilon_decay_decisions: u64,
     pub grad_clip_norm: f64,
-    pub log_interval_games: u64,
+    pub log_interval_seconds: u64,
     pub save_interval_games: u64,
 }
 
@@ -170,8 +170,8 @@ impl Config {
             "transitions_per_update と target_update_interval は 1 以上にしてください",
         )?;
         check(
-            train.log_interval_games >= 1 && train.save_interval_games >= 1,
-            "log_interval_games と save_interval_games は 1 以上にしてください",
+            train.log_interval_seconds >= 1 && train.save_interval_games >= 1,
+            "log_interval_seconds と save_interval_games は 1 以上にしてください",
         )?;
         Ok(())
     }

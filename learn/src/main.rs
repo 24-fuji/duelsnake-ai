@@ -2,6 +2,7 @@ mod config;
 mod env;
 mod export;
 mod model;
+mod monitor;
 mod replay;
 mod trainer;
 
@@ -9,6 +10,7 @@ use clap::Parser;
 use config::Config;
 use env::observation::{GRID_CHANNELS, VECTOR_FEATURES};
 use export::ModelFile;
+use monitor::TrainLog;
 use replay::ReplayBuffer;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,8 +50,9 @@ struct Cli {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let crate_dir = Path::new(CRATE_DIR);
+    let repo_dir = crate_dir.parent().unwrap_or(crate_dir);
     let config_path = cli.config.unwrap_or_else(|| crate_dir.join("config.yaml"));
-    let out_dir = cli.out_dir.unwrap_or_else(|| crate_dir.join("../model"));
+    let out_dir = cli.out_dir.unwrap_or_else(|| repo_dir.join("model"));
     let recent_model = out_dir.join("recent-model/snake-model.json");
 
     let mut config = Config::load(&config_path)?;
@@ -64,11 +67,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let device = Device::cuda_if_available();
     let seed = cli.seed.unwrap_or_else(rand::random);
 
+    let mut notices = Vec::new();
     let resume = match cli.resume {
         Some(path) => {
             let path = path.unwrap_or_else(|| recent_model.clone());
-            println!("学習を再開します: {}", path.display());
-            Some(ModelFile::read(&path)?)
+            let model = ModelFile::read(&path)?;
+            notices.push(format!("学習を再開します: {}", path.display()));
+            if model.game != config.game {
+                notices.push("注意: 再開元モデルと config.yaml のゲームルールが異なります。現在の config.yaml のルールで学習を続けます".to_string());
+            }
+            Some(model)
         }
         None => None,
     };
@@ -79,44 +87,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         * ReplayBuffer::bytes_per_transition(grid_len, VECTOR_FEATURES)) as f64
         / 1e6;
     let resumed = trainer.info();
-    println!("DuelSnake-AI 自己対戦学習");
-    println!("  設定       : {}", config_path.display());
-    println!(
-        "  デバイス   : {device:?} / スレッド {threads} / 同時対戦 {}",
-        config.train.num_envs
-    );
-    println!(
-        "  ネットワーク: {} パラメータ / リプレイ最大 {replay_mb:.0} MB",
-        trainer.spec().parameter_count()
-    );
-    println!("  シード     : {seed}");
+
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let mut log = TrainLog::create(&repo_dir.join(format!("log/train-{timestamp}")))?;
+    let mut lines = vec![
+        "DuelSnake-AI 自己対戦学習".to_string(),
+        format!("  設定       : {}", config_path.display()),
+        format!(
+            "  デバイス   : {device:?} / スレッド {threads} / 同時対戦 {}",
+            config.train.num_envs
+        ),
+        format!(
+            "  ネットワーク: {} パラメータ / リプレイ最大 {replay_mb:.0} MB",
+            trainer.spec().parameter_count()
+        ),
+        format!("  シード     : {seed}"),
+    ];
     if resumed.games > 0 {
-        println!(
+        lines.push(format!(
             "  再開時点   : {} 試合 / {} 判断 / {} 更新",
             resumed.games, resumed.decisions, resumed.updates
-        );
+        ));
     }
+    lines.extend(notices);
+    for line in &lines {
+        println!("{line}");
+        log.event(line.trim_start())?;
+    }
+    println!(
+        "  詳しいログ : {} (別の端末で `just train-watch` を実行すると追えます)",
+        log.text_path().display()
+    );
     println!("Ctrl+C で中断するとモデルを保存して終了します");
 
     let running = Arc::new(AtomicBool::new(true));
     let flag = running.clone();
     ctrlc::set_handler(move || {
-        if flag.swap(false, Ordering::SeqCst) {
-            println!(
-                "\n[SIGINT] 中断します。モデルを保存しています... (もう一度押すと保存せず終了)"
-            );
-        } else {
+        // 1回目は学習ループに止まってもらい、保存してから終了する。2回目は保存せずに終了する
+        if !flag.swap(false, Ordering::SeqCst) {
+            println!();
             std::process::exit(130);
         }
     })?;
 
-    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let paths = OutputPaths {
         recent_model,
         backup_dir: out_dir.join("models"),
-        log_file: crate_dir.join(format!("../log/train-{timestamp}.csv")),
     };
-    trainer.run(&running, cli.games, &paths)?;
+    trainer.run(&running, cli.games, &paths, &mut log)?;
     println!("学習を終了しました");
+    log.event("学習を終了しました")?;
     Ok(())
 }

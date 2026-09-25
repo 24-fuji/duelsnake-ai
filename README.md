@@ -19,10 +19,17 @@ Human vs AI リアルタイム対戦型スネークゲーム。
 just train                # Ctrl+C で中断すると model/ に保存して終了
 just train --games 50000  # 指定した試合数で終了
 just train-resume         # 最新モデルから再開
+just train-watch          # 学習中のログを表示し続ける (別の端末で実行)
 just test                 # ルールとモデル書き出しのテスト
 ```
 
-学習ログは `log/train-*.csv` に出力されます。
+学習中のコンソールには、最下行に概数の試合数などの状況だけを表示します。
+詳しい様子はログファイルに出力されるので、別の端末で `just train-watch` を実行すると追えます。
+
+- `log/train-<日時>.log`: 人が読む用。30 秒ごとの統計 (ε・loss・平均 Q 値・スコア・行動の内訳など) と、保存・中断などの出来事
+- `log/train-<日時>.csv`: 同じ統計の表。グラフを描くときに使う
+
+ログの間隔は `learn/config.yaml` の `train.log_interval_seconds` で変えられます。
 
 ## Web アプリ
 公開版: https://24-fuji.github.io/duelsnake-ai/

@@ -62,7 +62,7 @@ train:
   epsilon_end: 0.05
   epsilon_decay_decisions: 1000000
   grad_clip_norm: 10.0
-  log_interval_games: 500
+  log_interval_seconds: 30 # この秒数ごとに統計を log/train-*.log と .csv に書き出す
   save_interval_games: 10000
 
 # --- 書き出し ---

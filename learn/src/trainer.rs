@@ -6,21 +6,19 @@ use crate::env::observation::{self, GRID_CHANNELS, VECTOR_FEATURES};
 use crate::env::rules::Rules;
 use crate::export::{ModelFile, TrainingInfo};
 use crate::model::{NetworkSpec, QNetwork};
+use crate::monitor::{approx_count, hms, thousands, StatsRow, StatusLine, TrainLog};
 use crate::replay::{NStepBuilder, Obs, ReplayBuffer};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tch::nn::OptimizerConfig;
-use tch::{nn, Device, Reduction, Tensor};
+use tch::{nn, Device, Kind, Reduction, Tensor};
 
 pub struct OutputPaths {
     pub recent_model: PathBuf,
     pub backup_dir: PathBuf,
-    pub log_file: PathBuf,
 }
 
 /// 1プレイヤー分の判断の流れ
@@ -63,7 +61,10 @@ struct WindowStats {
     length_sum: usize,
     ticks_sum: u64,
     loss_sum: f64,
+    q_sum: f64,
     loss_count: u64,
+    /// ランダムでない行動の回数 (Action::ALL の順)
+    action_counts: [u64; Action::COUNT],
 }
 
 impl WindowStats {
@@ -77,7 +78,9 @@ impl WindowStats {
             length_sum: 0,
             ticks_sum: 0,
             loss_sum: 0.0,
+            q_sum: 0.0,
             loss_count: 0,
+            action_counts: [0; Action::COUNT],
         }
     }
 
@@ -133,9 +136,6 @@ impl Trainer {
 
         let mut info = TrainingInfo::default();
         if let Some(model) = resume {
-            if model.game != config.game {
-                println!("注意: 再開元モデルと config.yaml のゲームルールが異なります。現在の config.yaml のルールで学習を続けます");
-            }
             model.load_into(&mut online, &spec)?;
             info = model.training;
         }
@@ -193,19 +193,14 @@ impl Trainer {
         running: &AtomicBool,
         max_games: Option<u64>,
         paths: &OutputPaths,
+        log: &mut TrainLog,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(dir) = paths.log_file.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let mut log = BufWriter::new(File::create(&paths.log_file)?);
-        writeln!(
-            log,
-            "games,decisions,updates,epsilon,loss,avg_score,avg_length,death_rate,draw_rate,avg_ticks,games_per_sec"
-        )?;
-
+        let started = Instant::now();
         let session_start = self.info.games;
         let save_interval = self.config.train.save_interval_games;
+        let log_interval = Duration::from_secs(self.config.train.log_interval_seconds);
         let mut stats = WindowStats::new();
+        let mut status = StatusLine::new();
 
         while running.load(Ordering::SeqCst)
             && max_games.is_none_or(|m| self.info.games - session_start < m)
@@ -214,22 +209,35 @@ impl Trainer {
             self.tick(&mut stats);
             self.train_if_due(&mut stats);
 
-            if stats.games >= self.config.train.log_interval_games {
-                self.report(&stats, &mut log)?;
+            if stats.games > 0 && stats.started.elapsed() >= log_interval {
+                log.stats(&self.stats_row(&stats))?;
                 stats = WindowStats::new();
             }
             if self.info.games / save_interval > games_before / save_interval {
                 self.save(&paths.recent_model)?;
-                println!(
-                    "  -> 途中経過を保存しました: {}",
+                let message = format!(
+                    "途中経過を保存しました ({} 試合): {}",
+                    thousands(self.info.games),
                     paths.recent_model.display()
                 );
+                status.message(&message);
+                log.event(&message)?;
+            }
+            if status.due() {
+                status.show(self.status_text(started, session_start));
             }
         }
-        if stats.games > 0 {
-            self.report(&stats, &mut log)?;
+
+        if !running.load(Ordering::SeqCst) {
+            let message =
+                "中断しました。モデルを保存しています... (もう一度 Ctrl+C で保存せずに終了)";
+            status.message(message);
+            log.event(message)?;
         }
-        log.flush()?;
+        if stats.games > 0 {
+            log.stats(&self.stats_row(&stats))?;
+        }
+        status.clear();
 
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
         let backup = paths
@@ -237,9 +245,40 @@ impl Trainer {
             .join(format!("snake-model-{timestamp}.json"));
         self.save(&backup)?;
         self.save(&paths.recent_model)?;
-        println!("バックアップを保存しました: {}", backup.display());
-        println!("最新モデルを更新しました: {}", paths.recent_model.display());
+        let messages = [
+            format!(
+                "この実行で {} 試合 (合計 {} 試合) を {} で学習しました",
+                thousands(self.info.games - session_start),
+                thousands(self.info.games),
+                hms(started.elapsed())
+            ),
+            format!("バックアップを保存しました: {}", backup.display()),
+            format!("最新モデルを更新しました: {}", paths.recent_model.display()),
+        ];
+        for message in &messages {
+            println!("{message}");
+            log.event(message)?;
+        }
         Ok(())
+    }
+
+    /// 最下行に出す状況。試合数は同時対戦の都合で端数が意味を持たないので概数にする
+    fn status_text(&self, started: Instant, session_start: u64) -> String {
+        let elapsed = started.elapsed();
+        let phase = if self.replay.len() < self.config.train.learning_starts {
+            "経験を収集中"
+        } else {
+            "学習中"
+        };
+        let games_per_sec =
+            (self.info.games - session_start) as f64 / elapsed.as_secs_f64().max(1e-9);
+        format!(
+            "{phase} | 約 {} 試合 | ε {:.2} | {:.1} 試合/秒 | 経過 {}",
+            approx_count(self.info.games),
+            self.epsilon(),
+            games_per_sec,
+            hms(elapsed)
+        )
     }
 
     pub fn save(&self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -271,7 +310,7 @@ impl Trainer {
                 &mut self.vector_buf[k * v..(k + 1) * v],
             );
         }
-        let actions = self.select_actions(n);
+        let actions = self.select_actions(n, stats);
         self.info.decisions += n as u64;
 
         let mut env_actions = vec![[None; NUM_PLAYERS]; self.slots.len()];
@@ -328,7 +367,7 @@ impl Trainer {
     }
 
     /// ε-greedy。ランダムに決まらなかった分だけまとめて推論する
-    fn select_actions(&mut self, n: usize) -> Vec<i64> {
+    fn select_actions(&mut self, n: usize, stats: &mut WindowStats) -> Vec<i64> {
         let (g, v) = (self.grid_len(), VECTOR_FEATURES);
         let epsilon = self.epsilon();
         let mut actions = vec![0i64; n];
@@ -361,6 +400,7 @@ impl Trainer {
         let best = Vec::<i64>::try_from(best.to(Device::Cpu)).expect("行動の取り出しに失敗");
         for (&k, a) in greedy.iter().zip(best) {
             actions[k] = a;
+            stats.action_counts[a as usize] += 1;
         }
         actions
     }
@@ -373,23 +413,30 @@ impl Trainer {
         }
         while self.since_update >= per_update {
             self.since_update -= per_update;
-            stats.loss_sum += self.train_step();
+            let (loss, q_mean) = self.train_step();
+            stats.loss_sum += loss;
+            stats.q_sum += q_mean;
             stats.loss_count += 1;
         }
     }
 
-    fn train_step(&mut self) -> f64 {
+    /// 1回更新し、(損失, 学習バッチでの max Q の平均) を返す
+    fn train_step(&mut self) -> (f64, f64) {
         let train = &self.config.train;
         let batch = self
             .replay
             .sample(train.batch_size, &mut self.rng, self.device);
         let bootstrap_discount = train.gamma.powi(train.n_step as i32);
 
-        let q = self
-            .online
-            .forward(&batch.grid, &batch.vector)
-            .gather(1, &batch.actions, false)
-            .squeeze_dim(1);
+        let q_all = self.online.forward(&batch.grid, &batch.vector);
+        let q_mean = tch::no_grad(|| {
+            q_all
+                .max_dim(1, false)
+                .0
+                .mean(Kind::Float)
+                .double_value(&[])
+        });
+        let q = q_all.gather(1, &batch.actions, false).squeeze_dim(1);
         let target = tch::no_grad(|| {
             // Double DQN: 次の行動はオンライン側で選び、その価値はターゲット側で見積もる
             let next_action = self
@@ -417,52 +464,34 @@ impl Trainer {
                 .copy(&self.online_vs)
                 .expect("ターゲットネットワークの同期に失敗");
         }
-        loss.double_value(&[])
+        (loss.double_value(&[]), q_mean)
     }
 
-    fn report(&self, stats: &WindowStats, log: &mut impl Write) -> std::io::Result<()> {
+    fn stats_row(&self, stats: &WindowStats) -> StatsRow {
         let games = stats.games.max(1) as f64;
         let snakes = games * NUM_PLAYERS as f64;
-        let loss = if stats.loss_count > 0 {
-            stats.loss_sum / stats.loss_count as f64
+        let (loss, q_mean) = if stats.loss_count > 0 {
+            let n = stats.loss_count as f64;
+            (stats.loss_sum / n, stats.q_sum / n)
         } else {
-            f64::NAN
+            (f64::NAN, f64::NAN)
         };
-        let avg_score = stats.score_sum as f64 / snakes;
-        let avg_length = stats.length_sum as f64 / snakes;
-        let death_rate = stats.deaths as f64 / games;
-        let draw_rate = stats.draws as f64 / games;
-        let avg_ticks = stats.ticks_sum as f64 / games;
-        let games_per_sec = stats.games as f64 / stats.started.elapsed().as_secs_f64();
-        let epsilon = self.epsilon();
-
-        println!(
-            "[{:>8} 試合] ε {:.3} | loss {:.4} | スコア {:.2} | 長さ {:.1} | 死亡決着 {:>5.1}% | 引き分け {:>4.1}% | {:.0} ティック | {:.1} 試合/秒",
-            self.info.games,
-            epsilon,
+        let greedy = stats.action_counts.iter().sum::<u64>().max(1) as f64;
+        StatsRow {
+            games: self.info.games,
+            window_games: stats.games,
+            decisions: self.info.decisions,
+            updates: self.info.updates,
+            epsilon: self.epsilon(),
             loss,
-            avg_score,
-            avg_length,
-            death_rate * 100.0,
-            draw_rate * 100.0,
-            avg_ticks,
-            games_per_sec,
-        );
-        writeln!(
-            log,
-            "{},{},{},{:.4},{:.6},{:.3},{:.2},{:.4},{:.4},{:.1},{:.2}",
-            self.info.games,
-            self.info.decisions,
-            self.info.updates,
-            epsilon,
-            loss,
-            avg_score,
-            avg_length,
-            death_rate,
-            draw_rate,
-            avg_ticks,
-            games_per_sec,
-        )?;
-        log.flush()
+            q_mean,
+            avg_score: stats.score_sum as f64 / snakes,
+            avg_length: stats.length_sum as f64 / snakes,
+            death_rate: stats.deaths as f64 / games,
+            draw_rate: stats.draws as f64 / games,
+            avg_ticks: stats.ticks_sum as f64 / games,
+            games_per_sec: stats.games as f64 / stats.started.elapsed().as_secs_f64(),
+            action_rates: stats.action_counts.map(|c| c as f64 / greedy),
+        }
     }
 }
