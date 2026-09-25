@@ -46,5 +46,15 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # 配信元が「Deploy from a branch」のままだと、ここでデプロイしても README のページで上書きされる
+      - name: Check Pages source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          build_type=$(gh api "repos/${{ github.repository }}/pages" --jq .build_type 2>/dev/null || echo "disabled")
+          if [ "$build_type" != "workflow" ]; then
+            echo "::error::GitHub Pages の配信元が GitHub Actions ではありません (現在: $build_type)。Settings → Pages → Build and deployment → Source を「GitHub Actions」にしてから、このワークフローを再実行してください。"
+            exit 1
+          fi
       - id: deployment
         uses: actions/deploy-pages@v5

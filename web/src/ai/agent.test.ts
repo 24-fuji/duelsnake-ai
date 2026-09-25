@@ -29,5 +29,6 @@ describe("学習済みモデル", () => {
     }
     expect(env.result).not.toBeNull();
     expect(env.tick).toBeLessThanOrEqual(300);
-  });
+    // 1試合で数百回推論するので、遅い CI マシンでも既定の 5 秒で切れないようにする
+  }, 30_000);
 });
