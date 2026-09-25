@@ -88,8 +88,10 @@ input[type="file"] {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  text-align: center;
   background: rgba(10, 13, 17, 0.6);
   font-size: 24px;
   font-weight: bold;
@@ -193,4 +195,89 @@ input[type="file"] {
 
 .help h2 {
   font-size: 16px;
+}
+
+/* --- 携帯版 --- */
+
+.app.mobile {
+  padding: 12px;
+}
+
+.app.mobile h1 {
+  margin-bottom: 8px;
+  font-size: 20px;
+}
+
+.app.mobile .settings {
+  gap: 8px 14px;
+  font-size: 14px;
+}
+
+/* 狭い画面では、ファイルの選択欄を文字の下に回す */
+.app.mobile .settings .file {
+  flex-wrap: wrap;
+}
+
+.game.mobile {
+  /* 横向きでも盤面が画面の高さに収まるようにする */
+  max-width: 75vh;
+  margin: 0 auto;
+}
+
+.mobile-top {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin: 8px 0;
+}
+
+.mobile-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.mobile-status .timer {
+  font-size: 20px;
+}
+
+/* 相手 (観戦中はもう一方の AI) の盤面。枠の色でどちらのヘビかを示す */
+.wipe {
+  flex: none;
+  width: 36%;
+  border: 2px solid;
+}
+
+.wipe .board {
+  border: none;
+}
+
+.wipe.swappable {
+  cursor: pointer;
+}
+
+.stage {
+  position: relative;
+  margin-bottom: 8px;
+  /* スワイプや長押しで、画面のスクロール・拡大・文字の選択・メニューが起きないようにする */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.board.fill {
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+}
+
+.overlay .hint {
+  margin: 0;
+  font-size: 16px;
+  font-weight: normal;
 }

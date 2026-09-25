@@ -5,9 +5,12 @@ import { GameEnv, type Action } from "../game/game";
 import { rulesFromConfig } from "../game/rules";
 import { Board } from "./Board";
 import { PLAYER_PALETTES } from "./draw";
+import { useGestures, type Gesture } from "./gestures";
 import { PlayerPanel } from "./PlayerPanel";
 
 export type Mode = "human_vs_ai" | "ai_vs_ai";
+/** パソコン版はキーボードで操作して両方の盤面を並べる。携帯版はタッチで操作し、片方の盤面を右上のワイプに小さく映す */
+export type Layout = "pc" | "mobile";
 type Status = "ready" | "running" | "paused" | "over";
 
 const KEY_ACTIONS: Record<string, Action> = {
@@ -35,9 +38,10 @@ interface Props {
   speed: number;
   /** 試合が終わったら自動で次の試合を始める (AI 同士のみ) */
   autoRestart: boolean;
+  layout: Layout;
 }
 
-export function GameScreen({ model, mode, randomActionRate, speed, autoRestart }: Props) {
+export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, layout }: Props) {
   const rules = useMemo(() => rulesFromConfig(model.info.game), [model]);
   const ais = useMemo(
     () =>
@@ -56,6 +60,8 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart }
   const statusRef = useRef(status);
   const [version, setVersion] = useState(0);
   const [tally, setTally] = useState({ wins: [0, 0], draws: 0 });
+  /** 携帯版の AI 同士で大きく映すプレイヤー。もう一方はワイプに映す */
+  const [focus, setFocus] = useState(0);
 
   useEffect(() => {
     statusRef.current = status;
@@ -151,16 +157,94 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart }
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [start, ais]);
 
+  // 携帯版: スワイプで向きを変え、長押しでブースト、ダブルタップでアイテムを使う。止まっているときはタップで開始する
+  const onGesture = useCallback(
+    (gesture: Gesture) => {
+      const current = statusRef.current;
+      if (current !== "running") {
+        if (gesture.kind === "tap") start();
+        return;
+      }
+      if (ais[0]) return;
+      if (gesture.kind === "swipe") inputsRef.current.push(gesture.direction);
+      else if (gesture.kind === "long_press") inputsRef.current.push("boost");
+      else if (gesture.kind === "double_tap") inputsRef.current.push("use_item");
+    },
+    [start, ais],
+  );
+  const gestures = useGestures(onGesture);
+
   const env = envRef.current;
   const remaining = (env.remainingTicks * rules.tickSeconds).toFixed(1);
+  const tallyText = `${names[0]} ${tally.wins[0]} 勝 / ${names[1]} ${tally.wins[1]} 勝 / 引き分け ${tally.draws}`;
+  const board = (player: number) => (
+    <Board
+      field={env.fields[player]}
+      rules={rules}
+      palette={PLAYER_PALETTES[player]}
+      version={version}
+      fill={layout === "mobile"}
+    />
+  );
+  const panel = (player: number) => (
+    <PlayerPanel
+      title={names[player]}
+      field={env.fields[player]}
+      rules={rules}
+      palette={PLAYER_PALETTES[player]}
+      decision={ais[player] ? decisionsRef.current[player] : undefined}
+      actions={model.info.actions}
+    />
+  );
+  const overlay = status !== "running" && (
+    <div className="overlay">
+      <p>{overlayMessage(status, env, names, layout)}</p>
+      {layout === "mobile" && status === "over" && <p className="hint">タップでもう一度</p>}
+    </div>
+  );
+
+  if (layout === "mobile") {
+    const watching = mode === "ai_vs_ai";
+    const main = watching ? focus : 0;
+    const sub = 1 - main;
+    return (
+      <div className="game mobile">
+        <div className="mobile-top">
+          <div className="mobile-status">
+            <span className="timer">残り {remaining} 秒</span>
+            <span>
+              スコア {names[0]} {env.fields[0].snake.score} : {env.fields[1].snake.score} {names[1]}
+            </span>
+            <span className="tally">{tallyText}</span>
+            {status === "running" ? (
+              <button onClick={() => setStatus("paused")}>一時停止</button>
+            ) : (
+              <button onClick={start}>{status === "over" ? "もう一度" : status === "paused" ? "再開" : "開始"}</button>
+            )}
+          </div>
+          <div
+            className={watching ? "wipe swappable" : "wipe"}
+            style={{ borderColor: PLAYER_PALETTES[sub].head }}
+            title={watching ? `タップで${names[sub]}を大きく映す` : names[sub]}
+            onClick={watching ? () => setFocus(sub) : undefined}
+          >
+            {board(sub)}
+          </div>
+        </div>
+        <div className="stage" {...gestures}>
+          {board(main)}
+          {overlay}
+        </div>
+        {panel(main)}
+      </div>
+    );
+  }
 
   return (
     <div className="game">
       <div className="topbar">
         <span className="timer">残り {remaining} 秒</span>
-        <span className="tally">
-          {names[0]} {tally.wins[0]} 勝 / {names[1]} {tally.wins[1]} 勝 / 引き分け {tally.draws}
-        </span>
+        <span className="tally">{tallyText}</span>
         {status === "running" ? (
           <button onClick={() => setStatus("paused")}>一時停止 (P)</button>
         ) : (
@@ -170,30 +254,20 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart }
       <div className="boards">
         {[0, 1].map((player) => (
           <div className="side" key={player}>
-            <Board field={env.fields[player]} rules={rules} palette={PLAYER_PALETTES[player]} version={version} />
-            <PlayerPanel
-              title={names[player]}
-              field={env.fields[player]}
-              rules={rules}
-              palette={PLAYER_PALETTES[player]}
-              decision={ais[player] ? decisionsRef.current[player] : undefined}
-              actions={model.info.actions}
-            />
+            {board(player)}
+            {panel(player)}
           </div>
         ))}
-        {status !== "running" && (
-          <div className="overlay">
-            <p>{overlayMessage(status, env, names)}</p>
-          </div>
-        )}
+        {overlay}
       </div>
     </div>
   );
 }
 
-function overlayMessage(status: Status, env: GameEnv, names: string[]): string {
-  if (status === "ready") return "Enter キーで開始";
-  if (status === "paused") return "一時停止中 (P で再開)";
+function overlayMessage(status: Status, env: GameEnv, names: string[], layout: Layout): string {
+  const touch = layout === "mobile";
+  if (status === "ready") return touch ? "タップで開始" : "Enter キーで開始";
+  if (status === "paused") return touch ? "一時停止中 (タップで再開)" : "一時停止中 (P で再開)";
   const result = env.result;
   if (!result) return "";
   const outcome = result.winner === null ? "引き分け" : `${names[result.winner]}の勝ち`;

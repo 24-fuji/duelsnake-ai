@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Field } from "../game/field";
 import type { Rules } from "../game/rules";
 import { drawField, type Palette } from "./draw";
@@ -16,23 +16,46 @@ interface Props {
   palette: Palette;
   /** ゲームが進むたびに増える値。変わったら描き直す */
   version: number;
+  /** 1マスの大きさ (CSS ピクセル)。省略すると盤面のマス数から決める */
   cellSize?: number;
+  /** 親要素の幅いっぱいに広げる (cellSize は使わない) */
+  fill?: boolean;
 }
 
-export function Board({ field, rules, palette, version, cellSize = defaultCellSize(rules) }: Props) {
+export function Board({ field, rules, palette, version, cellSize, fill = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [fillWidth, setFillWidth] = useState(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!fill || !canvas) return;
+    const observer = new ResizeObserver(([entry]) => setFillWidth(entry.contentRect.width));
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [fill]);
+
+  const cell = fill ? fillWidth / rules.width : (cellSize ?? defaultCellSize(rules));
+  // 高解像度の画面でもぼやけないよう、画面の画素数に合わせて描く
+  const scale = window.devicePixelRatio || 1;
 
   useEffect(() => {
     const ctx = canvasRef.current?.getContext("2d");
-    if (ctx) drawField(ctx, field, rules, cellSize, palette);
-  }, [field, rules, palette, version, cellSize]);
+    if (!ctx || cell <= 0) return;
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    drawField(ctx, field, rules, cell, palette);
+  }, [field, rules, palette, version, cell, scale]);
 
   return (
     <canvas
       ref={canvasRef}
-      className="board"
-      width={rules.width * cellSize}
-      height={rules.height * cellSize}
+      className={fill ? "board fill" : "board"}
+      width={Math.round(rules.width * cell * scale)}
+      height={Math.round(rules.height * cell * scale)}
+      style={
+        fill
+          ? { aspectRatio: `${rules.width} / ${rules.height}` }
+          : { width: rules.width * cell, height: rules.height * cell }
+      }
     />
   );
 }

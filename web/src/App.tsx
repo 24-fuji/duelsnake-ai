@@ -3,12 +3,25 @@ import { assertModelCompatible } from "./ai/agent";
 import { BUNDLED_MODELS } from "./ai/catalog";
 import { SnakeModel, type ModelFile } from "./ai/model";
 import { itemColor } from "./components/draw";
-import { GameScreen, type Mode } from "./components/GameScreen";
+import { GameScreen, type Layout, type Mode } from "./components/GameScreen";
 
 /** 最初に選ぶ盤面。そのモデルが無ければ一覧の先頭を選ぶ */
 const DEFAULT_BOARD = "16x16";
 const DIFFICULTY_LABELS: Record<string, string> = { easy: "かんたん", medium: "ふつう", hard: "むずかしい" };
 const SPEEDS = [1, 2, 4];
+/** 表示の切り替えを覚えておく localStorage のキー */
+const LAYOUT_KEY = "duelsnake.layout";
+
+/** 前に選んだ表示があればそれを、無ければ指で操作する端末かどうかで決める */
+function initialLayout(): Layout {
+  try {
+    const saved = localStorage.getItem(LAYOUT_KEY);
+    if (saved === "pc" || saved === "mobile") return saved;
+  } catch {
+    // 保存できない環境では毎回判定する
+  }
+  return window.matchMedia("(pointer: coarse)").matches ? "mobile" : "pc";
+}
 
 interface LoadedModel {
   model: SnakeModel;
@@ -37,6 +50,16 @@ export function App() {
   const [difficulty, setDifficulty] = useState("hard");
   const [speed, setSpeed] = useState(1);
   const [autoRestart, setAutoRestart] = useState(true);
+  const [layout, setLayout] = useState(initialLayout);
+
+  const changeLayout = (next: Layout) => {
+    setLayout(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, next);
+    } catch {
+      // 保存できなくても、この画面では切り替わる
+    }
+  };
 
   useEffect(() => {
     const entry = BUNDLED_MODELS.find((m) => m.key === board);
@@ -73,7 +96,7 @@ export function App() {
   const randomActionRate = current?.model.randomActionRate(difficulty) ?? 0;
 
   return (
-    <div className="app">
+    <div className={`app ${layout}`}>
       <header>
         <h1>DuelSnake AI</h1>
         <div className="settings">
@@ -132,6 +155,13 @@ export function App() {
             />
             自動で次の試合
           </label>
+          <label>
+            表示
+            <select value={layout} onChange={(e) => changeLayout(e.target.value as Layout)}>
+              <option value="pc">パソコン版</option>
+              <option value="mobile">携帯版 (タッチ操作)</option>
+            </select>
+          </label>
           <label className="file">
             別のモデルを読み込む
             <input
@@ -162,6 +192,7 @@ export function App() {
           randomActionRate={randomActionRate}
           speed={mode === "ai_vs_ai" ? speed : 1}
           autoRestart={autoRestart}
+          layout={layout}
         />
       ) : (
         !error && <p>モデルを読み込み中...</p>
@@ -169,12 +200,22 @@ export function App() {
 
       <section className="help">
         <h2>操作</h2>
-        <ul>
-          <li>移動: 矢印キー / WASD</li>
-          <li>ブースト: スペース</li>
-          <li>アイテム使用: Shift / E</li>
-          <li>開始・もう一度: Enter、一時停止: P / Esc</li>
-        </ul>
+        {layout === "mobile" ? (
+          <ul>
+            <li>移動: 盤面をスワイプ (指を離さずに続けて曲がれる)</li>
+            <li>ブースト: 盤面を長押し</li>
+            <li>アイテム使用: 盤面をダブルタップ</li>
+            <li>開始・もう一度・再開: 盤面をタップ</li>
+            <li>観戦中: 右上の小さい盤面をタップすると、大きく映す AI を入れ替える</li>
+          </ul>
+        ) : (
+          <ul>
+            <li>移動: 矢印キー / WASD</li>
+            <li>ブースト: スペース</li>
+            <li>アイテム使用: Shift / E</li>
+            <li>開始・もう一度: Enter、一時停止: P / Esc</li>
+          </ul>
+        )}
         <p>
           アイテム: <span className="dot" style={{ background: itemColor("normal_apple") }} />
           リンゴ (+1) <span className="dot" style={{ background: itemColor("gold_apple") }} />
