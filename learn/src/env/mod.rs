@@ -1,3 +1,8 @@
+pub mod field;
 pub mod game;
+pub mod observation;
+pub mod rules;
 pub mod snake;
-pub mod tensor;
+
+#[cfg(test)]
+mod tests;

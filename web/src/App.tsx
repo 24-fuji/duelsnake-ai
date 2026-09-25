@@ -1,0 +1,154 @@
+import { useEffect, useState } from "react";
+import defaultModelUrl from "../../model/recent-model/snake-model.json?url";
+import { assertModelCompatible } from "./ai/agent";
+import { SnakeModel, type ModelFile } from "./ai/model";
+import { itemColor } from "./components/draw";
+import { GameScreen, type Mode } from "./components/GameScreen";
+
+const DEFAULT_MODEL_NAME = "model/recent-model/snake-model.json";
+const DIFFICULTY_LABELS: Record<string, string> = { easy: "かんたん", medium: "ふつう", hard: "むずかしい" };
+const SPEEDS = [1, 2, 4];
+
+interface LoadedModel {
+  model: SnakeModel;
+  name: string;
+  /** 読み込むたびに変わる値。ゲーム画面を作り直すのに使う */
+  id: number;
+}
+
+let nextModelId = 1;
+
+function loaded(model: SnakeModel, name: string): LoadedModel {
+  assertModelCompatible(model);
+  return { model, name, id: nextModelId++ };
+}
+
+export function App() {
+  const [current, setCurrent] = useState<LoadedModel | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("human_vs_ai");
+  const [difficulty, setDifficulty] = useState("hard");
+  const [speed, setSpeed] = useState(1);
+  const [autoRestart, setAutoRestart] = useState(true);
+
+  useEffect(() => {
+    SnakeModel.load(defaultModelUrl)
+      .then((model) => setCurrent(loaded(model, DEFAULT_MODEL_NAME)))
+      .catch((e: unknown) => setError(`既定のモデルを読み込めません: ${String(e)}`));
+  }, []);
+
+  const loadFile = async (file: File) => {
+    try {
+      const model = new SnakeModel(JSON.parse(await file.text()) as ModelFile);
+      setCurrent(loaded(model, file.name));
+      setError(null);
+    } catch (e) {
+      setError(`${file.name} を読み込めません: ${String(e)}`);
+    }
+  };
+
+  const info = current?.model.info;
+  const difficulties = info?.difficulty ?? [];
+  const randomActionRate = current?.model.randomActionRate(difficulty) ?? 0;
+
+  return (
+    <div className="app">
+      <header>
+        <h1>DuelSnake AI</h1>
+        <div className="settings">
+          <label>
+            モード
+            <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
+              <option value="human_vs_ai">あなた vs AI</option>
+              <option value="ai_vs_ai">AI vs AI (観戦)</option>
+            </select>
+          </label>
+          <label>
+            難易度
+            <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)}>
+              {difficulties.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {DIFFICULTY_LABELS[d.name] ?? d.name} (ランダム {Math.round(d.random_action_rate * 100)}%)
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            速度
+            <select
+              value={mode === "ai_vs_ai" ? speed : 1}
+              disabled={mode !== "ai_vs_ai"}
+              onChange={(e) => setSpeed(Number(e.target.value))}
+            >
+              {SPEEDS.map((s) => (
+                <option key={s} value={s}>
+                  x{s}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={autoRestart}
+              disabled={mode !== "ai_vs_ai"}
+              onChange={(e) => setAutoRestart(e.target.checked)}
+            />
+            自動で次の試合
+          </label>
+          <label className="file">
+            別のモデルを読み込む
+            <input
+              type="file"
+              accept=".json,application/json"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void loadFile(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+        {current && info && (
+          <p className="model-info">
+            モデル: {current.name} / 学習 {info.training.games.toLocaleString()} 試合 / 作成{" "}
+            {new Date(info.created_at).toLocaleString()}
+          </p>
+        )}
+        {error && <p className="error">{error}</p>}
+      </header>
+
+      {current ? (
+        <GameScreen
+          key={`${current.id}-${mode}-${difficulty}`}
+          model={current.model}
+          mode={mode}
+          randomActionRate={randomActionRate}
+          speed={mode === "ai_vs_ai" ? speed : 1}
+          autoRestart={autoRestart}
+        />
+      ) : (
+        !error && <p>モデルを読み込み中...</p>
+      )}
+
+      <section className="help">
+        <h2>操作</h2>
+        <ul>
+          <li>移動: 矢印キー / WASD</li>
+          <li>ブースト: スペース</li>
+          <li>アイテム使用: Shift / E</li>
+          <li>開始・もう一度: Enter、一時停止: P / Esc</li>
+        </ul>
+        <p>
+          アイテム: <span className="dot" style={{ background: itemColor("normal_apple") }} />
+          リンゴ (+1) <span className="dot" style={{ background: itemColor("gold_apple") }} />
+          金のリンゴ (+3) <span className="dot" style={{ background: itemColor("poison_apple") }} />
+          毒リンゴ (-1, 縮む) <b>C</b> ブロック消去 <b>J</b> お邪魔 (相手にブロックを送る)
+        </p>
+        <p>
+          ルールの詳細は <code>learn/RULES.md</code> を参照してください。
+        </p>
+      </section>
+    </div>
+  );
+}

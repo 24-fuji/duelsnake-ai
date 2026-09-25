@@ -1,0 +1,196 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  background: #11151a;
+  color: #e3e7ec;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: 24px;
+}
+
+.settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+}
+
+.settings label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+select,
+button,
+input[type="file"] {
+  font: inherit;
+}
+
+.model-info {
+  color: #9aa5b1;
+  font-size: 13px;
+}
+
+.error {
+  color: #ef5350;
+}
+
+.topbar {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.timer {
+  font-size: 22px;
+  font-weight: bold;
+  font-variant-numeric: tabular-nums;
+}
+
+.tally {
+  color: #9aa5b1;
+}
+
+.boards {
+  position: relative;
+  width: fit-content;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.board {
+  display: block;
+  border: 2px solid #37414d;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 13, 17, 0.6);
+  font-size: 24px;
+  font-weight: bold;
+  pointer-events: none;
+}
+
+.panel h2 {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.swatch,
+.dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.dot {
+  border-radius: 50%;
+  margin: 0 4px 0 8px;
+}
+
+.dead {
+  color: #ef5350;
+  font-size: 14px;
+}
+
+.panel dl {
+  display: grid;
+  grid-template-columns: 7em 1fr;
+  gap: 2px 8px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.panel dt {
+  color: #9aa5b1;
+}
+
+.panel dd {
+  margin: 0;
+}
+
+.score {
+  font-weight: bold;
+}
+
+.qvalues p,
+.qvalues-empty {
+  margin: 8px 0 4px;
+  font-size: 14px;
+}
+
+.random {
+  color: #ffb74d;
+}
+
+.qvalues table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.qvalues td {
+  padding: 1px 4px;
+}
+
+.qvalues tr.chosen {
+  background: #263238;
+  font-weight: bold;
+}
+
+.bar-cell {
+  width: 50%;
+}
+
+.bar {
+  height: 10px;
+  background: #607d8b;
+}
+
+.chosen .bar {
+  background: #4fc3f7;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.help {
+  margin-top: 24px;
+  color: #b0bac5;
+  font-size: 14px;
+}
+
+.help h2 {
+  font-size: 16px;
+}

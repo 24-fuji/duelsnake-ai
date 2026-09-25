@@ -5,9 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
-  },
-  // ONNX Runtime Web用のWASMファイル読み込み設定
-  optimizeDeps: {
-    exclude: ['onnxruntime-web'],
+    // リポジトリ直下の model/ にある学習済みモデルを読み込めるようにする
+    fs: { allow: ['..'] },
   },
 });

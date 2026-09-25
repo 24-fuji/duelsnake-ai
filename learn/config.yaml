@@ -1,31 +1,74 @@
-grid:
-  width: 16
-  height: 16
-  time_limit_seconds: 30.0
+# DuelSnake-AI 学習設定
+# ルールの詳細は RULES.md を参照。
 
-snake:
-  initial_length: 3
-  normal_speed_interval_sec: 0.2
-  boost_speed_interval_sec: 0.1
-  boost_duration_sec: 5.0
-  boost_cooldown_sec: 7.5
+# --- ゲームルール ---
+# Web 版と共通のパラメータ。学習済みモデルの JSON にもそのまま書き出される。
+game:
+  grid:
+    width: 16
+    height: 16
+    tick_seconds: 0.1 # 1ティックの長さ。以下の秒数はすべてティック数に丸めて扱う
+    time_limit_seconds: 30.0
 
-items:
-  apple_respawn_delay_sec: 0.6
-  special_respawn_delay_sec: 1.0
-  jam_block_delay_sec: 0.2
-  max_apples: 3
-  max_poison: 2
-  normal_apple_score: 1
-  gold_apple_score: 3
-  poison_apple_score: -1
-  normal_apple_grow: 1
-  gold_apple_grow: 3
-  poison_apple_grow: -2
+  snake:
+    initial_length: 3
+    normal_speed_interval_sec: 0.2
+    boost_speed_interval_sec: 0.1
+    boost_duration_sec: 5.0
+    boost_cooldown_sec: 7.5 # ブースト終了後から数える
 
-agent:
-  learning_rate: 0.001
-  epsilon: 0.1
-  num_actions: 5
-  input_channels: 8
-  random_action_bound: 5
+  items:
+    apple_respawn_delay_sec: 0.6 # 普通のリンゴ・毒リンゴ
+    special_respawn_delay_sec: 1.0 # 金のリンゴ・ブロック消去・お邪魔
+    jam_block_delay_sec: 0.2 # お邪魔を使ってから相手フィールドにブロックが出るまで
+    jam_block_safe_distance: 2 # 相手の頭からこのマンハッタン距離以内にはブロックを出さない
+    max_apples: 3 # 普通のリンゴの個数
+    max_poison: 2 # 毒リンゴの個数
+    normal_apple_score: 1
+    gold_apple_score: 3
+    poison_apple_score: -1
+    normal_apple_grow: 1
+    gold_apple_grow: 3
+    poison_apple_grow: -2
+
+# --- ネットワーク構造 ---
+# 盤面 → 畳み込み (3x3, padding 1, ReLU) → 平坦化 + 状態ベクトル → 全結合 (ReLU) → 行動ごとの Q 値
+model:
+  conv_layers:
+    - { channels: 16, stride: 1 } # 16x16
+    - { channels: 32, stride: 2 } # 8x8
+    - { channels: 64, stride: 2 } # 4x4
+  hidden_layers: [128]
+
+# --- 報酬 ---
+reward:
+  win: 1.0
+  lose: -1.0
+  draw: 0.0
+  score_point: 0.1 # スコア1点の増減あたり
+
+# --- 学習 (自己対戦 Double DQN) ---
+train:
+  num_envs: 64 # 同時に進める対戦数。1対戦ごとに2匹分の経験が得られ、推論もまとめて行う
+  learning_rate: 0.0005
+  gamma: 0.99 # 1判断あたりの割引率
+  n_step: 3
+  batch_size: 128
+  replay_capacity: 200000 # 1遷移あたり約 4.7KB (16x16 盤面で 200000 なら約 0.95GB)
+  learning_starts: 10000 # リプレイにこの数の遷移が溜まるまで学習しない
+  transitions_per_update: 32 # 新しい遷移がこの数だけ溜まるごとに1回更新する
+  target_update_interval: 1000 # ターゲットネットワークを同期する更新回数の間隔
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_decisions: 1000000
+  grad_clip_norm: 10.0
+  log_interval_games: 500
+  save_interval_games: 10000
+
+# --- 書き出し ---
+export:
+  # Web 側で使う難易度。random_action_rate の確率で AI がランダムに行動する
+  difficulty:
+    - { name: easy, random_action_rate: 0.6 }
+    - { name: medium, random_action_rate: 0.3 }
+    - { name: hard, random_action_rate: 0.0 }

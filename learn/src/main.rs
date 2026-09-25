@@ -1,134 +1,122 @@
-mod agent;
 mod config;
 mod env;
-mod memory;
+mod export;
+mod model;
+mod replay;
+mod trainer;
 
-use agent::DQNAgent;
-use config::GameConfig;
-use env::game::GameEnv;
-use env::snake::Direction;
-use env::tensor::field_to_tensor;
-
-use chrono::Local;
-use std::env as std_env;
-use std::fs;
-use std::process::Command;
+use clap::Parser;
+use config::Config;
+use env::observation::{GRID_CHANNELS, VECTOR_FEATURES};
+use export::ModelFile;
+use replay::ReplayBuffer;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tch::Device;
+use trainer::{OutputPaths, Trainer};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std_env::args().collect();
-    let mode = args
-        .iter()
-        .position(|r| r == "--mode")
-        .and_then(|i| args.get(i + 1))
-        .map(|s| s.as_str())
-        .unwrap_or("half-memory");
+const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
-    println!("DuelSnake-AI RL Training Started");
-    let config = GameConfig::load("../model/config.yaml")?;
-
-    let env_mem_bytes = std::mem::size_of::<GameEnv>();
-    let workers = memory::calculate_workers(mode, env_mem_bytes);
-    println!("Mode: {}, Active Workers: {}", mode, workers);
-
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        println!("\n[SIGINT] 中断シグナルを受信。エピソード完了後にモデルを保存します...");
-        r.store(false, Ordering::SeqCst);
-    })?;
-
-    let agent = DQNAgent::new(&config.agent);
-    let mut episode = 0;
-
-    while running.load(Ordering::SeqCst) {
-        episode += 1;
-        let mut game = GameEnv::new(config.clone());
-
-        while game.time_remaining_steps > 0 && game.player_field.snake.is_alive {
-            let p_tensor = field_to_tensor(
-                &game.player_field,
-                config.grid.width as i64,
-                config.grid.height as i64,
-            );
-            let ai_tensor = field_to_tensor(
-                &game.ai_field,
-                config.grid.width as i64,
-                config.grid.height as i64,
-            );
-
-            let p_action = agent.select_action(
-                &p_tensor,
-                config.agent.epsilon,
-                config.agent.random_action_bound,
-            );
-            let ai_action = agent.select_action(
-                &ai_tensor,
-                config.agent.epsilon,
-                config.agent.random_action_bound,
-            );
-
-            let (p_dir, p_use) = parse_action(p_action, game.player_field.snake.dir);
-            let (ai_dir, ai_use) = parse_action(ai_action, game.ai_field.snake.dir);
-
-            game.step(p_dir, p_use, ai_dir, ai_use);
-        }
-
-        if episode % 100 == 0 {
-            println!(
-                "Completed Episode: {}, Player Score: {}",
-                episode, game.player_field.snake.score
-            );
-        }
-    }
-
-    // --- 1. .pt モデルの保存（バックアップ ＋ recent） ---
-    println!("Saving trained model...");
-    fs::create_dir_all("../model/recent-model")?;
-    fs::create_dir_all("../model/models")?;
-
-    let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let backup_path = format!("../model/models/snake-model-{}.pt", timestamp);
-    let recent_pt_path = "../model/recent-model/snake-model.pt";
-    let recent_onnx_path = "../model/recent-model/snake-model.onnx";
-
-    agent.vs.save(&backup_path)?;
-    agent.vs.save(recent_pt_path)?;
-
-    println!("Saved backup model: {}", backup_path);
-    println!("Updated recent model: {}", recent_pt_path);
-
-    // --- 2. 成果物 (.onnx) への変換処理 ---
-    println!("Converting recent model to ONNX format...");
-    let script_path = "../model/convert-to-onnx.py";
-
-    let status = Command::new("python3")
-        .arg(script_path)
-        .arg(recent_pt_path)
-        .arg(recent_onnx_path)
-        .status();
-
-    match status {
-        Ok(s) if s.success() => {
-            println!("Successfully generated ONNX model: {}", recent_onnx_path);
-        }
-        _ => {
-            eprintln!("Warning: Failed to convert model to ONNX. Ensure python3, torch, and script exist.");
-        }
-    }
-
-    println!("Training session finished safely.");
-    Ok(())
+/// DuelSnake-AI の自己対戦強化学習。Ctrl+C で中断すると、その時点のモデルを JSON で保存して終了する
+#[derive(Parser)]
+struct Cli {
+    /// 設定ファイル [既定: learn/config.yaml]
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// モデルの出力先 [既定: model/]
+    #[arg(long)]
+    out_dir: Option<PathBuf>,
+    /// 保存済みモデル JSON から学習を再開する [値を省略すると <out_dir>/recent-model/snake-model.json]
+    #[arg(long, value_name = "MODEL_JSON")]
+    resume: Option<Option<PathBuf>>,
+    /// この回数の対戦を終えたら終了する [既定: Ctrl+C まで続ける]
+    #[arg(long)]
+    games: Option<u64>,
+    /// 同時に進める対戦数 (config の train.num_envs を上書き)
+    #[arg(long)]
+    envs: Option<usize>,
+    /// libtorch のスレッド数 [既定: 論理コア数の半分]
+    /// 小さなネットワークでは論理コアをすべて使うとかえって遅くなる
+    #[arg(long)]
+    threads: Option<usize>,
+    /// 乱数シード [既定: ランダム]
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
-fn parse_action(action: i64, current_dir: Direction) -> (Direction, bool) {
-    match action {
-        0 => (Direction::Up, false),
-        1 => (Direction::Down, false),
-        2 => (Direction::Left, false),
-        3 => (Direction::Right, false),
-        4 => (current_dir, true),
-        _ => (current_dir, false),
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+    let crate_dir = Path::new(CRATE_DIR);
+    let config_path = cli.config.unwrap_or_else(|| crate_dir.join("config.yaml"));
+    let out_dir = cli.out_dir.unwrap_or_else(|| crate_dir.join("../model"));
+    let recent_model = out_dir.join("recent-model/snake-model.json");
+
+    let mut config = Config::load(&config_path)?;
+    if let Some(envs) = cli.envs {
+        config.train.num_envs = envs.max(1);
     }
+    let threads = cli.threads.unwrap_or_else(|| {
+        let logical = std::thread::available_parallelism().map_or(1, |n| n.get());
+        (logical / 2).max(1)
+    });
+    tch::set_num_threads(threads as i32);
+    let device = Device::cuda_if_available();
+    let seed = cli.seed.unwrap_or_else(rand::random);
+
+    let resume = match cli.resume {
+        Some(path) => {
+            let path = path.unwrap_or_else(|| recent_model.clone());
+            println!("学習を再開します: {}", path.display());
+            Some(ModelFile::read(&path)?)
+        }
+        None => None,
+    };
+
+    let mut trainer = Trainer::new(config.clone(), device, seed, resume)?;
+    let grid_len = GRID_CHANNELS * (config.game.grid.width * config.game.grid.height) as usize;
+    let replay_mb = (config.train.replay_capacity
+        * ReplayBuffer::bytes_per_transition(grid_len, VECTOR_FEATURES)) as f64
+        / 1e6;
+    let resumed = trainer.info();
+    println!("DuelSnake-AI 自己対戦学習");
+    println!("  設定       : {}", config_path.display());
+    println!(
+        "  デバイス   : {device:?} / スレッド {threads} / 同時対戦 {}",
+        config.train.num_envs
+    );
+    println!(
+        "  ネットワーク: {} パラメータ / リプレイ最大 {replay_mb:.0} MB",
+        trainer.spec().parameter_count()
+    );
+    println!("  シード     : {seed}");
+    if resumed.games > 0 {
+        println!(
+            "  再開時点   : {} 試合 / {} 判断 / {} 更新",
+            resumed.games, resumed.decisions, resumed.updates
+        );
+    }
+    println!("Ctrl+C で中断するとモデルを保存して終了します");
+
+    let running = Arc::new(AtomicBool::new(true));
+    let flag = running.clone();
+    ctrlc::set_handler(move || {
+        if flag.swap(false, Ordering::SeqCst) {
+            println!(
+                "\n[SIGINT] 中断します。モデルを保存しています... (もう一度押すと保存せず終了)"
+            );
+        } else {
+            std::process::exit(130);
+        }
+    })?;
+
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let paths = OutputPaths {
+        recent_model,
+        backup_dir: out_dir.join("models"),
+        log_file: crate_dir.join(format!("../log/train-{timestamp}.csv")),
+    };
+    trainer.run(&running, cli.games, &paths)?;
+    println!("学習を終了しました");
+    Ok(())
 }
