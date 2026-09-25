@@ -28,7 +28,6 @@ struct Stream {
     last: Option<(Obs, i64)>,
     /// 直前の判断以降に得た報酬
     reward: f32,
-    score: i32,
     /// この試合で引力・斥力から得た報酬の合計
     force_reward: f32,
     nstep: NStepBuilder,
@@ -44,7 +43,6 @@ impl Slot {
         let stream = || Stream {
             last: None,
             reward: 0.0,
-            score: 0,
             force_reward: 0.0,
             nstep: NStepBuilder::new(n_step, gamma),
         };
@@ -357,12 +355,13 @@ impl Trainer {
             });
             slot.env.step(actions);
             for (p, stream) in slot.streams.iter_mut().enumerate() {
-                let snake = &slot.env.fields[p].snake;
-                stream.reward += (snake.score - stream.score) as f32 * reward_cfg.score_point;
-                stream.score = snake.score;
+                let field = &slot.env.fields[p];
+                if let Some(kind) = field.eaten {
+                    stream.reward += reward_cfg.pickup.reward(kind);
+                }
                 if let Some(before) = &before {
                     let (head, items, obstacles) = &before[p];
-                    let work = self.force.work(items, obstacles, *head, snake.head());
+                    let work = self.force.work(items, obstacles, *head, field.snake.head());
                     stream.reward += work;
                     stream.force_reward += work;
                 }

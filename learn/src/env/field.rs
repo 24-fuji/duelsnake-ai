@@ -34,6 +34,8 @@ pub struct Field {
     pub pending_spawns: Vec<PendingSpawn>,
     /// 相手から送られたお邪魔ブロックの出現待ち (残りティック数)
     pub incoming_jams: Vec<u32>,
+    /// 直前のティックに取ったアイテム。ゲームの進行には使わず、学習の報酬に使う
+    pub eaten: Option<ItemType>,
 }
 
 impl Field {
@@ -48,6 +50,7 @@ impl Field {
             obstacles: Vec::new(),
             pending_spawns: Vec::new(),
             incoming_jams: Vec::new(),
+            eaten: None,
         };
 
         let initial = std::iter::repeat_n(ItemType::NormalApple, rules.normal_apples)
@@ -150,6 +153,7 @@ impl Field {
 
     /// ヘビのタイマーを進め、移動するティックなら移動・衝突判定・アイテム取得まで行う
     pub fn update_snake(&mut self, rules: &Rules) {
+        self.eaten = None;
         if !self.snake.alive || !self.snake.advance_timers(rules) {
             return;
         }
@@ -167,6 +171,7 @@ impl Field {
         if let Some(idx) = self.items.iter().position(|i| i.pos == next) {
             let item = self.items.remove(idx);
             self.consume(item.kind, rules);
+            self.eaten = Some(item.kind);
         }
     }
 

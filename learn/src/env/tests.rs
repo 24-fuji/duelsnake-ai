@@ -111,6 +111,11 @@ fn normal_apple_scores_and_grows_on_next_move() {
     let snake = &env.fields[0].snake;
     assert_eq!((snake.score, snake.len(), snake.pending_growth), (1, 3, 1));
     assert!(env.fields[0].items.is_empty());
+    assert_eq!(env.fields[0].eaten, Some(ItemType::NormalApple));
+
+    // 取ったことが残るのは、取ったティックだけ
+    env.step([None, None]);
+    assert_eq!(env.fields[0].eaten, None);
 
     move_once(&mut env, None);
     assert_eq!(env.fields[0].snake.len(), 4);

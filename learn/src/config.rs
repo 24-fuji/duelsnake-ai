@@ -1,3 +1,4 @@
+use crate::env::field::ItemType;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -78,8 +79,31 @@ pub struct RewardConfig {
     pub win: f32,
     pub lose: f32,
     pub draw: f32,
-    pub score_point: f32,
+    pub pickup: PickupRewardConfig,
     pub force: ForceConfig,
+}
+
+/// アイテムを取ったときの報酬
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PickupRewardConfig {
+    pub normal_apple: f32,
+    pub gold_apple: f32,
+    pub poison_apple: f32,
+    pub block_clear: f32,
+    pub block_jam: f32,
+}
+
+impl PickupRewardConfig {
+    pub fn reward(&self, kind: ItemType) -> f32 {
+        match kind {
+            ItemType::NormalApple => self.normal_apple,
+            ItemType::GoldApple => self.gold_apple,
+            ItemType::PoisonApple => self.poison_apple,
+            ItemType::BlockClear => self.block_clear,
+            ItemType::BlockJam => self.block_jam,
+        }
+    }
 }
 
 /// 引力・斥力による報酬の補助。強さはすべて 0 以上で、0 ならその力は働かない
