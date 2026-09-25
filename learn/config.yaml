@@ -55,8 +55,8 @@ reward:
   force:
     attraction_range: 30 # 引力が届く距離。盤面の端から端 (幅 + 高さ − 2) 以上にすると盤面全体に届く
     repulsion_range: 1 # 斥力が届く距離。1 なら隣のマスに入るときと、そこから取る・離れるときだけ働く
-    normal_apple_attraction: 0.1 # 普通のリンゴの引力の強さ
-    gold_apple_attraction: 0.3 # 金のリンゴの引力の強さ
+    normal_apple_attraction: 0.2 # 普通のリンゴの引力の強さ
+    gold_apple_attraction: 0.6 # 金のリンゴの引力の強さ
     poison_apple_repulsion: 0.1 # 毒リンゴの斥力の強さ
     jam_block_repulsion: 1.0 # お邪魔ブロックの斥力の強さ (ぶつかると頭は進まないので、隣に入るときの 強さ / 2 だけ引かれる)
 
