@@ -25,7 +25,11 @@ just test                 # ルールとモデル書き出しのテスト
 学習ログは `log/train-*.csv` に出力されます。
 
 ## Web アプリ
-Node.js (v18 以降) が必要です。
+公開版: https://24-fuji.github.io/duelsnake-ai/
+
+main に push すると GitHub Actions ([.github/workflows/deploy-web.yml](.github/workflows/deploy-web.yml)) がテスト・ビルドして GitHub Pages に公開します。
+
+ローカルで動かすには Node.js (v18 以降) が必要です。
 
 ```sh
 just web-install  # 初回のみ
