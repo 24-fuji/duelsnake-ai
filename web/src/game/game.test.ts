@@ -1,7 +1,8 @@
 // learn/src/env/tests.rs と同じ内容のテスト。両方の実装が同じルールで動くことを確かめる
 
 import { describe, expect, it } from "vitest";
-import modelFile from "../../../model/recent-model/snake-model.json";
+// 盤面の座標などは 16x16 のルールで書いている
+import modelFile from "../../../model/recent-model/snake-model-16x16.json";
 import { GameEnv, type Action } from "./game";
 import { rulesFromConfig, type GameRules, type Rules } from "./rules";
 import { manhattan, type Direction, type Position } from "./snake";

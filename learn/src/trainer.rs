@@ -4,7 +4,8 @@ use crate::config::Config;
 use crate::env::game::{Action, EndReason, GameEnv, GameResult, NUM_PLAYERS};
 use crate::env::observation::{self, GRID_CHANNELS, VECTOR_FEATURES};
 use crate::env::rules::Rules;
-use crate::export::{ModelFile, TrainingInfo};
+use crate::export::{self, ModelFile, TrainingInfo};
+use crate::force::ForceField;
 use crate::model::{NetworkSpec, QNetwork};
 use crate::monitor::{approx_count, hms, thousands, StatsRow, StatusLine, TrainLog};
 use crate::replay::{NStepBuilder, Obs, ReplayBuffer};
@@ -28,6 +29,8 @@ struct Stream {
     /// 直前の判断以降に得た報酬
     reward: f32,
     score: i32,
+    /// この試合で引力・斥力から得た報酬の合計
+    force_reward: f32,
     nstep: NStepBuilder,
 }
 
@@ -42,6 +45,7 @@ impl Slot {
             last: None,
             reward: 0.0,
             score: 0,
+            force_reward: 0.0,
             nstep: NStepBuilder::new(n_step, gamma),
         };
         Self {
@@ -59,6 +63,7 @@ struct WindowStats {
     draws: u64,
     score_sum: i64,
     length_sum: usize,
+    force_reward_sum: f64,
     ticks_sum: u64,
     loss_sum: f64,
     q_sum: f64,
@@ -76,6 +81,7 @@ impl WindowStats {
             draws: 0,
             score_sum: 0,
             length_sum: 0,
+            force_reward_sum: 0.0,
             ticks_sum: 0,
             loss_sum: 0.0,
             q_sum: 0.0,
@@ -84,13 +90,15 @@ impl WindowStats {
         }
     }
 
-    fn record_game(&mut self, env: &GameEnv, result: GameResult) {
+    fn record_game(&mut self, slot: &Slot, result: GameResult) {
+        let env = &slot.env;
         self.games += 1;
         self.deaths += (result.reason == EndReason::Death) as u64;
         self.draws += result.winner.is_none() as u64;
-        for field in &env.fields {
+        for (field, stream) in env.fields.iter().zip(&slot.streams) {
             self.score_sum += field.snake.score as i64;
             self.length_sum += field.snake.len();
+            self.force_reward_sum += stream.force_reward as f64;
         }
         self.ticks_sum += env.tick as u64;
     }
@@ -99,6 +107,7 @@ impl WindowStats {
 pub struct Trainer {
     config: Config,
     rules: Rules,
+    force: ForceField,
     spec: NetworkSpec,
     device: Device,
     online_vs: nn::VarStore,
@@ -150,6 +159,7 @@ impl Trainer {
             .collect();
 
         Ok(Self {
+            force: ForceField::new(&config.reward.force),
             config,
             rules,
             spec,
@@ -240,9 +250,10 @@ impl Trainer {
         status.clear();
 
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        let backup = paths
-            .backup_dir
-            .join(format!("snake-model-{timestamp}.json"));
+        let backup = paths.backup_dir.join(format!(
+            "snake-model-{}-{timestamp}.json",
+            export::size_label(&self.config.game.grid)
+        ));
         self.save(&backup)?;
         self.save(&paths.recent_model)?;
         let messages = [
@@ -337,11 +348,24 @@ impl Trainer {
         let reward_cfg = &self.config.reward;
         let (n_step, gamma) = (self.config.train.n_step, self.config.train.gamma as f32);
         for (slot, actions) in self.slots.iter_mut().zip(env_actions) {
+            // 引力・斥力の仕事は、動く前の頭とアイテムの位置から求める
+            let before = self.force.is_active().then(|| {
+                slot.env
+                    .fields
+                    .each_ref()
+                    .map(|f| (f.snake.head(), f.items.clone()))
+            });
             slot.env.step(actions);
             for (p, stream) in slot.streams.iter_mut().enumerate() {
-                let score = slot.env.fields[p].snake.score;
-                stream.reward += (score - stream.score) as f32 * reward_cfg.score_point;
-                stream.score = score;
+                let snake = &slot.env.fields[p].snake;
+                stream.reward += (snake.score - stream.score) as f32 * reward_cfg.score_point;
+                stream.score = snake.score;
+                if let Some(before) = &before {
+                    let (head, items) = &before[p];
+                    let work = self.force.work(items, *head, snake.head());
+                    stream.reward += work;
+                    stream.force_reward += work;
+                }
             }
 
             let Some(result) = slot.env.result else {
@@ -360,7 +384,7 @@ impl Trainer {
                             .push(obs, action, stream.reward, None, &mut self.replay);
                 }
             }
-            stats.record_game(&slot.env, result);
+            stats.record_game(slot, result);
             self.info.games += 1;
             *slot = Slot::new(self.rules, self.rng.gen(), n_step, gamma);
         }
@@ -487,6 +511,7 @@ impl Trainer {
             q_mean,
             avg_score: stats.score_sum as f64 / snakes,
             avg_length: stats.length_sum as f64 / snakes,
+            avg_force_reward: stats.force_reward_sum / snakes,
             death_rate: stats.deaths as f64 / games,
             draw_rate: stats.draws as f64 / games,
             avg_ticks: stats.ticks_sum as f64 / games,

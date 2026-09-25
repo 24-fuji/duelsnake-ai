@@ -1,6 +1,6 @@
 //! 学習済みモデルの JSON 形式。Web からそのまま読み込めるよう、構造・ルール・重みを1ファイルにまとめる
 
-use crate::config::{Config, DifficultyConfig, GameConfig};
+use crate::config::{Config, DifficultyConfig, GameConfig, GridConfig};
 use crate::env::game::Action;
 use crate::env::observation::{
     GRID_CHANNEL_NAMES, INCOMING_JAMS_SCALE, PENDING_GROWTH_SCALE, SCORE_DIFF_SCALE,
@@ -15,6 +15,24 @@ use tch::Tensor;
 
 pub const FORMAT: &str = "duelsnake-dqn";
 pub const FORMAT_VERSION: u32 = 1;
+
+/// ファイル名に付ける盤面サイズ (例: 16x16)
+pub fn size_label(grid: &GridConfig) -> String {
+    format!("{}x{}", grid.width, grid.height)
+}
+
+/// 盤面サイズごとの最新モデルのファイル名 (例: snake-model-16x16.json)。Web 側はこの名前から盤面サイズを読み取る
+pub fn model_file_name(grid: &GridConfig) -> String {
+    format!("snake-model-{}.json", size_label(grid))
+}
+
+/// `model_file_name` の形のファイル名なら、その盤面サイズの部分を返す
+pub fn size_from_file_name(name: &str) -> Option<&str> {
+    let size = name.strip_prefix("snake-model-")?.strip_suffix(".json")?;
+    let (w, h) = size.split_once('x')?;
+    let is_number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    (is_number(w) && is_number(h)).then_some(size)
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModelFile {
@@ -373,6 +391,23 @@ mod tests {
         assert_eq!(actual.len(), Action::COUNT);
         for (a, e) in actual.iter().zip(&expected) {
             assert!((a - e).abs() < 1e-4, "{actual:?} != {expected:?}");
+        }
+    }
+
+    #[test]
+    fn file_name_carries_grid_size() {
+        let mut grid = config().game.grid;
+        (grid.width, grid.height) = (20, 12);
+        let name = model_file_name(&grid);
+        assert_eq!(name, "snake-model-20x12.json");
+        assert_eq!(size_from_file_name(&name), Some("20x12"));
+        for other in [
+            "snake-model.json",
+            "snake-model-16x16-20260925-191819.json",
+            "snake-model-x16.json",
+            "snake-model-16x16.json.tmp",
+        ] {
+            assert_eq!(size_from_file_name(other), None, "{other}");
         }
     }
 

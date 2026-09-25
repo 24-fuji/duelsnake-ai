@@ -9,7 +9,7 @@ build-learn:
 train *ARGS:
     cd learn && cargo run --release -- {{ARGS}}
 
-# model/recent-model/snake-model.json から学習を再開する
+# config.yaml の盤面サイズのモデル (model/recent-model/snake-model-<幅>x<高さ>.json) から学習を再開する。無ければ警告を出して新しく学習する
 train-resume *ARGS:
     cd learn && cargo run --release -- --resume {{ARGS}}
 

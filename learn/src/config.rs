@@ -79,6 +79,17 @@ pub struct RewardConfig {
     pub lose: f32,
     pub draw: f32,
     pub score_point: f32,
+    pub force: ForceConfig,
+}
+
+/// 引力・斥力による報酬の補助。強さはすべて 0 以上で、0 ならその力は働かない
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForceConfig {
+    pub range: f32,
+    pub normal_apple_attraction: f32,
+    pub gold_apple_attraction: f32,
+    pub poison_apple_repulsion: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -157,6 +168,21 @@ impl Config {
                 .all(|c| c.channels > 0 && c.stride > 0)
                 && self.model.hidden_layers.iter().all(|&h| h > 0),
             "層のチャネル数・ストライド・ユニット数は正の値にしてください",
+        )?;
+        let force = &self.reward.force;
+        check(
+            force.range > 0.0,
+            "reward.force.range は正の値にしてください",
+        )?;
+        check(
+            [
+                force.normal_apple_attraction,
+                force.gold_apple_attraction,
+                force.poison_apple_repulsion,
+            ]
+            .iter()
+            .all(|&s| s >= 0.0),
+            "reward.force の強さは 0 以上にしてください",
         )?;
         check(train.num_envs >= 1, "num_envs は 1 以上にしてください")?;
         check(train.n_step >= 1, "n_step は 1 以上にしてください")?;

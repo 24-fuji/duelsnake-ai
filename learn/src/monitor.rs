@@ -21,6 +21,8 @@ pub struct StatsRow {
     pub q_mean: f64,
     pub avg_score: f64,
     pub avg_length: f64,
+    /// 1匹1試合あたりの引力・斥力による報酬
+    pub avg_force_reward: f64,
     pub death_rate: f64,
     pub draw_rate: f64,
     pub avg_ticks: f64,
@@ -46,7 +48,7 @@ impl TrainLog {
         let mut csv = BufWriter::new(File::create(base.with_extension("csv"))?);
         write!(
             csv,
-            "time,games,window_games,decisions,updates,epsilon,loss,q_mean,avg_score,avg_length,death_rate,draw_rate,avg_ticks,games_per_sec"
+            "time,games,window_games,decisions,updates,epsilon,loss,q_mean,avg_score,avg_length,avg_force_reward,death_rate,draw_rate,avg_ticks,games_per_sec"
         )?;
         for action in Action::ALL {
             write!(csv, ",action_{}", action.name())?;
@@ -77,13 +79,14 @@ impl TrainLog {
             .map(|(label, rate)| format!("{label} {:.0}%", rate * 100.0))
             .collect();
         self.event(&format!(
-            "[{} 試合] ε {:.3} | loss {:.4} | 平均Q {:.3} | スコア {:.2} | 長さ {:.1} | 死亡決着 {:.1}% | 引き分け {:.1}% | 平均 {:.0} ティック | {:.1} 試合/秒 (この間 {} 試合) | 行動 {}",
+            "[{} 試合] ε {:.3} | loss {:.4} | 平均Q {:.3} | スコア {:.2} | 長さ {:.1} | 引力・斥力 {:+.3} | 死亡決着 {:.1}% | 引き分け {:.1}% | 平均 {:.0} ティック | {:.1} 試合/秒 (この間 {} 試合) | 行動 {}",
             thousands(s.games),
             s.epsilon,
             s.loss,
             s.q_mean,
             s.avg_score,
             s.avg_length,
+            s.avg_force_reward,
             s.death_rate * 100.0,
             s.draw_rate * 100.0,
             s.avg_ticks,
@@ -94,7 +97,7 @@ impl TrainLog {
 
         write!(
             self.csv,
-            "{},{},{},{},{},{:.4},{:.6},{:.4},{:.3},{:.2},{:.4},{:.4},{:.1},{:.2}",
+            "{},{},{},{},{},{:.4},{:.6},{:.4},{:.3},{:.2},{:.4},{:.4},{:.4},{:.1},{:.2}",
             now(),
             s.games,
             s.window_games,
@@ -105,6 +108,7 @@ impl TrainLog {
             s.q_mean,
             s.avg_score,
             s.avg_length,
+            s.avg_force_reward,
             s.death_rate,
             s.draw_rate,
             s.avg_ticks,

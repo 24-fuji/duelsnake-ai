@@ -1,5 +1,5 @@
 /**
- * learn/ が書き出すモデル JSON (model/recent-model/snake-model.json) を読み込んで推論する。
+ * learn/ が書き出すモデル JSON (model/recent-model/snake-model-<幅>x<高さ>.json) を読み込んで推論する。
  * 観測 (入力) の作り方と順伝播の定義は learn/RULES.md の 10〜11 章を参照。
  */
 

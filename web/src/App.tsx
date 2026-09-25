@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import defaultModelUrl from "../../model/recent-model/snake-model.json?url";
 import { assertModelCompatible } from "./ai/agent";
+import { BUNDLED_MODELS } from "./ai/catalog";
 import { SnakeModel, type ModelFile } from "./ai/model";
 import { itemColor } from "./components/draw";
 import { GameScreen, type Mode } from "./components/GameScreen";
 
-const DEFAULT_MODEL_NAME = "model/recent-model/snake-model.json";
+/** 最初に選ぶ盤面。そのモデルが無ければ一覧の先頭を選ぶ */
+const DEFAULT_BOARD = "16x16";
 const DIFFICULTY_LABELS: Record<string, string> = { easy: "かんたん", medium: "ふつう", hard: "むずかしい" };
 const SPEEDS = [1, 2, 4];
 
@@ -25,22 +26,42 @@ function loaded(model: SnakeModel, name: string): LoadedModel {
 
 export function App() {
   const [current, setCurrent] = useState<LoadedModel | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /** 選んでいる同梱モデルの盤面 ("16x16" など)。ファイルから読み込んだモデルを使っている間は null */
+  const [board, setBoard] = useState<string | null>(
+    () => (BUNDLED_MODELS.find((m) => m.key === DEFAULT_BOARD) ?? BUNDLED_MODELS[0])?.key ?? null,
+  );
+  const [error, setError] = useState<string | null>(
+    BUNDLED_MODELS.length === 0 ? "model/recent-model/ に学習済みモデルがありません" : null,
+  );
   const [mode, setMode] = useState<Mode>("human_vs_ai");
   const [difficulty, setDifficulty] = useState("hard");
   const [speed, setSpeed] = useState(1);
   const [autoRestart, setAutoRestart] = useState(true);
 
   useEffect(() => {
-    SnakeModel.load(defaultModelUrl)
-      .then((model) => setCurrent(loaded(model, DEFAULT_MODEL_NAME)))
-      .catch((e: unknown) => setError(`既定のモデルを読み込めません: ${String(e)}`));
-  }, []);
+    const entry = BUNDLED_MODELS.find((m) => m.key === board);
+    if (!entry) return;
+    // 読み込み中に別の盤面を選んだら、古いほうの結果は捨てる
+    let cancelled = false;
+    SnakeModel.load(entry.url)
+      .then((model) => {
+        if (cancelled) return;
+        setCurrent(loaded(model, entry.path));
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(`${entry.path} を読み込めません: ${String(e)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [board]);
 
   const loadFile = async (file: File) => {
     try {
       const model = new SnakeModel(JSON.parse(await file.text()) as ModelFile);
       setCurrent(loaded(model, file.name));
+      setBoard(null);
       setError(null);
     } catch (e) {
       setError(`${file.name} を読み込めません: ${String(e)}`);
@@ -56,6 +77,21 @@ export function App() {
       <header>
         <h1>DuelSnake AI</h1>
         <div className="settings">
+          <label>
+            盤面
+            <select value={board ?? ""} onChange={(e) => setBoard(e.target.value)}>
+              {board === null && (
+                <option value="" disabled>
+                  {current ? `${boardLabel(current.model)} (読み込んだファイル)` : "なし"}
+                </option>
+              )}
+              {BUNDLED_MODELS.map((m) => (
+                <option key={m.key} value={m.key}>
+                  {m.width} × {m.height}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             モード
             <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
@@ -111,8 +147,8 @@ export function App() {
         </div>
         {current && info && (
           <p className="model-info">
-            モデル: {current.name} / 学習 {info.training.games.toLocaleString()} 試合 / 作成{" "}
-            {new Date(info.created_at).toLocaleString()}
+            モデル: {current.name} / 盤面 {boardLabel(current.model)} / 学習 {info.training.games.toLocaleString()} 試合 /
+            作成 {new Date(info.created_at).toLocaleString()}
           </p>
         )}
         {error && <p className="error">{error}</p>}
@@ -151,4 +187,9 @@ export function App() {
       </section>
     </div>
   );
+}
+
+function boardLabel(model: SnakeModel): string {
+  const { width, height } = model.info.game.grid;
+  return `${width} × ${height}`;
 }

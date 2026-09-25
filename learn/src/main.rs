@@ -1,6 +1,7 @@
 mod config;
 mod env;
 mod export;
+mod force;
 mod model;
 mod monitor;
 mod replay;
@@ -12,6 +13,7 @@ use env::observation::{GRID_CHANNELS, VECTOR_FEATURES};
 use export::ModelFile;
 use monitor::TrainLog;
 use replay::ReplayBuffer;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -29,7 +31,8 @@ struct Cli {
     /// モデルの出力先 [既定: model/]
     #[arg(long)]
     out_dir: Option<PathBuf>,
-    /// 保存済みモデル JSON から学習を再開する [値を省略すると <out_dir>/recent-model/snake-model.json]
+    /// 保存済みモデル JSON から学習を再開する。値を省略すると config.yaml の盤面サイズのモデル
+    /// (<out_dir>/recent-model/snake-model-<幅>x<高さ>.json) から再開し、無ければ警告を出して新しく学習する
     #[arg(long, value_name = "MODEL_JSON")]
     resume: Option<Option<PathBuf>>,
     /// この回数の対戦を終えたら終了する [既定: Ctrl+C まで続ける]
@@ -53,9 +56,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = crate_dir.parent().unwrap_or(crate_dir);
     let config_path = cli.config.unwrap_or_else(|| crate_dir.join("config.yaml"));
     let out_dir = cli.out_dir.unwrap_or_else(|| repo_dir.join("model"));
-    let recent_model = out_dir.join("recent-model/snake-model.json");
 
     let mut config = Config::load(&config_path)?;
+    let size = export::size_label(&config.game.grid);
+    let recent_dir = out_dir.join("recent-model");
+    let recent_model = recent_dir.join(export::model_file_name(&config.game.grid));
     if let Some(envs) = cli.envs {
         config.train.num_envs = envs.max(1);
     }
@@ -69,14 +74,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut notices = Vec::new();
     let resume = match cli.resume {
-        Some(path) => {
-            let path = path.unwrap_or_else(|| recent_model.clone());
-            let model = ModelFile::read(&path)?;
-            notices.push(format!("学習を再開します: {}", path.display()));
-            if model.game != config.game {
-                notices.push("注意: 再開元モデルと config.yaml のゲームルールが異なります。現在の config.yaml のルールで学習を続けます".to_string());
+        Some(Some(path)) => Some(read_resume_model(&path, &config, &mut notices)?),
+        Some(None) if recent_model.exists() => {
+            Some(read_resume_model(&recent_model, &config, &mut notices)?)
+        }
+        Some(None) => {
+            let mut warning = format!(
+                "警告: 盤面 {size} のモデル {} が無いので、新しく学習を始めます",
+                recent_model.display()
+            );
+            let others = model_sizes_in(&recent_dir);
+            if !others.is_empty() {
+                warning += &format!(
+                    " (今ある盤面: {})。別の盤面で続けるなら config.yaml の game.grid を変えてください",
+                    others.join(", ")
+                );
             }
-            Some(model)
+            notices.push(warning);
+            None
         }
         None => None,
     };
@@ -87,12 +102,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         * ReplayBuffer::bytes_per_transition(grid_len, VECTOR_FEATURES)) as f64
         / 1e6;
     let resumed = trainer.info();
+    let force = &config.reward.force;
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let mut log = TrainLog::create(&repo_dir.join(format!("log/train-{timestamp}")))?;
     let mut lines = vec![
         "DuelSnake-AI 自己対戦学習".to_string(),
         format!("  設定       : {}", config_path.display()),
+        format!("  盤面       : {size}"),
         format!(
             "  デバイス   : {device:?} / スレッド {threads} / 同時対戦 {}",
             config.train.num_envs
@@ -102,6 +119,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             trainer.spec().parameter_count()
         ),
         format!("  シード     : {seed}"),
+        format!(
+            "  引力・斥力 : リンゴ {} / 金のリンゴ {} / 毒リンゴ {} (range {})",
+            force.normal_apple_attraction,
+            force.gold_apple_attraction,
+            force.poison_apple_repulsion,
+            force.range
+        ),
     ];
     if resumed.games > 0 {
         lines.push(format!(
@@ -138,4 +162,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("学習を終了しました");
     log.event("学習を終了しました")?;
     Ok(())
+}
+
+/// 再開元のモデルを読む。盤面サイズが config.yaml と違えばエラーにする
+fn read_resume_model(
+    path: &Path,
+    config: &Config,
+    notices: &mut Vec<String>,
+) -> Result<ModelFile, Box<dyn std::error::Error>> {
+    let model = ModelFile::read(path)?;
+    let (model_size, size) = (
+        export::size_label(&model.game.grid),
+        export::size_label(&config.game.grid),
+    );
+    if model_size != size {
+        return Err(format!(
+            "再開元モデル {} の盤面 {model_size} が config.yaml の盤面 {size} と異なります",
+            path.display()
+        )
+        .into());
+    }
+    notices.push(format!("学習を再開します: {}", path.display()));
+    if model.game != config.game {
+        notices.push("注意: 再開元モデルと config.yaml のゲームルールが異なります。現在の config.yaml のルールで学習を続けます".to_string());
+    }
+    Ok(model)
+}
+
+/// `dir` にある盤面サイズごとのモデルの盤面サイズ
+fn model_sizes_in(dir: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut sizes: Vec<String> = entries
+        .filter_map(|e| {
+            let name = e.ok()?.file_name();
+            export::size_from_file_name(name.to_str()?).map(str::to_string)
+        })
+        .collect();
+    sizes.sort();
+    sizes
 }
