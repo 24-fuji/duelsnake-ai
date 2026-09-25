@@ -86,10 +86,13 @@ pub struct RewardConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForceConfig {
-    pub range: f32,
+    /// 引力・斥力が届く最大のマンハッタン距離
+    pub attraction_range: u32,
+    pub repulsion_range: u32,
     pub normal_apple_attraction: f32,
     pub gold_apple_attraction: f32,
     pub poison_apple_repulsion: f32,
+    pub jam_block_repulsion: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -171,14 +174,11 @@ impl Config {
         )?;
         let force = &self.reward.force;
         check(
-            force.range > 0.0,
-            "reward.force.range は正の値にしてください",
-        )?;
-        check(
             [
                 force.normal_apple_attraction,
                 force.gold_apple_attraction,
                 force.poison_apple_repulsion,
+                force.jam_block_repulsion,
             ]
             .iter()
             .all(|&s| s >= 0.0),

@@ -120,11 +120,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         format!("  シード     : {seed}"),
         format!(
-            "  引力・斥力 : リンゴ {} / 金のリンゴ {} / 毒リンゴ {} (range {})",
-            force.normal_apple_attraction,
-            force.gold_apple_attraction,
-            force.poison_apple_repulsion,
-            force.range
+            "  引力       : リンゴ {} / 金のリンゴ {} (range {})",
+            force.normal_apple_attraction, force.gold_apple_attraction, force.attraction_range
+        ),
+        format!(
+            "  斥力       : 毒リンゴ {} / お邪魔ブロック {} (range {})",
+            force.poison_apple_repulsion, force.jam_block_repulsion, force.repulsion_range
         ),
     ];
     if resumed.games > 0 {

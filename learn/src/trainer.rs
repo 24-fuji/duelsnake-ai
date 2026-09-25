@@ -348,12 +348,12 @@ impl Trainer {
         let reward_cfg = &self.config.reward;
         let (n_step, gamma) = (self.config.train.n_step, self.config.train.gamma as f32);
         for (slot, actions) in self.slots.iter_mut().zip(env_actions) {
-            // 引力・斥力の仕事は、動く前の頭とアイテムの位置から求める
+            // 引力・斥力の仕事は、動く前の頭・アイテム・お邪魔ブロックの位置から求める
             let before = self.force.is_active().then(|| {
                 slot.env
                     .fields
                     .each_ref()
-                    .map(|f| (f.snake.head(), f.items.clone()))
+                    .map(|f| (f.snake.head(), f.items.clone(), f.obstacles.clone()))
             });
             slot.env.step(actions);
             for (p, stream) in slot.streams.iter_mut().enumerate() {
@@ -361,8 +361,8 @@ impl Trainer {
                 stream.reward += (snake.score - stream.score) as f32 * reward_cfg.score_point;
                 stream.score = snake.score;
                 if let Some(before) = &before {
-                    let (head, items) = &before[p];
-                    let work = self.force.work(items, *head, snake.head());
+                    let (head, items, obstacles) = &before[p];
+                    let work = self.force.work(items, obstacles, *head, snake.head());
                     stream.reward += work;
                     stream.force_reward += work;
                 }
