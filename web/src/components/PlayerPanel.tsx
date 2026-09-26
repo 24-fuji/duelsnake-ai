@@ -23,9 +23,11 @@ interface Props {
   /** AI の直近の判断。人間なら undefined */
   decision?: Decision | null;
   actions?: readonly Action[];
+  /** 所持アイテムと飛来中のお邪魔の欄を出すか。所持アイテムが出ない一人モードでは出さない */
+  heldItems?: boolean;
 }
 
-export function PlayerPanel({ title, field, rules, palette, decision, actions }: Props) {
+export function PlayerPanel({ title, field, rules, palette, decision, actions, heldItems = true }: Props) {
   const snake = field.snake;
   const seconds = (ticks: number) => (ticks * rules.tickSeconds).toFixed(1);
   const boost =
@@ -47,12 +49,20 @@ export function PlayerPanel({ title, field, rules, palette, decision, actions }:
         <dd className="score">{snake.score}</dd>
         <dt>長さ</dt>
         <dd>{snake.length}</dd>
-        <dt>所持アイテム</dt>
-        <dd>{snake.heldItem ? HELD_LABELS[snake.heldItem] : "なし"}</dd>
+        {heldItems && (
+          <>
+            <dt>所持アイテム</dt>
+            <dd>{snake.heldItem ? HELD_LABELS[snake.heldItem] : "なし"}</dd>
+          </>
+        )}
         <dt>ブースト</dt>
         <dd>{boost}</dd>
-        <dt>飛来中のお邪魔</dt>
-        <dd>{field.incomingJams.length}</dd>
+        {heldItems && (
+          <>
+            <dt>飛来中のお邪魔</dt>
+            <dd>{field.incomingJams.length}</dd>
+          </>
+        )}
       </dl>
       {decision !== undefined && actions && <QValues decision={decision} actions={actions} />}
     </div>
