@@ -69,6 +69,11 @@ impl Field {
         field
     }
 
+    /// 生きているヘビが、お邪魔ブロック以外のすべてのマスを埋めているか
+    pub fn is_filled(&self, rules: &Rules) -> bool {
+        self.snake.alive && self.snake.len() + self.obstacles.len() == rules.cell_count()
+    }
+
     pub fn in_bounds(pos: Position, rules: &Rules) -> bool {
         pos.x >= 0 && pos.x < rules.width && pos.y >= 0 && pos.y < rules.height
     }

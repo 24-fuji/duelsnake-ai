@@ -8,7 +8,8 @@ export type Action = "up" | "down" | "left" | "right" | "boost" | "use_item";
 
 export const ACTIONS: readonly Action[] = ["up", "down", "left", "right", "boost", "use_item"];
 
-export type EndReason = "death" | "time_up";
+/** filled はお邪魔ブロック以外のすべてのマスをヘビで埋めたこと */
+export type EndReason = "filled" | "death" | "time_up";
 
 export interface GameResult {
   /** null は引き分け */
@@ -94,6 +95,11 @@ export class GameEnv {
   }
 
   private judge(): GameResult | null {
+    // 盤面を埋めたら、相手の生死やスコアに関わらず勝ち
+    const [fa, fb] = this.fields.map((f) => f.isFilled(this.rules));
+    if (fa && !fb) return { winner: 0, reason: "filled" };
+    if (!fa && fb) return { winner: 1, reason: "filled" };
+    if (fa && fb) return { winner: this.leaderByScore(), reason: "filled" };
     const [a, b] = this.fields.map((f) => f.snake.alive);
     if (a && !b) return { winner: 0, reason: "death" };
     if (!a && b) return { winner: 1, reason: "death" };

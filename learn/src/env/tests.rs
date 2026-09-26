@@ -230,6 +230,58 @@ fn simultaneous_deaths_are_decided_by_score() {
     }
 }
 
+/// 盤面のすべてのマスを、左上から 1 行ごとに折り返してたどる順に並べる
+fn serpentine(width: i32, height: i32) -> Vec<Position> {
+    (0..height)
+        .flat_map(|y| (0..width).map(move |i| pos(if y % 2 == 0 { i } else { width - 1 - i }, y)))
+        .collect()
+}
+
+/// 5 × 5 の盤面で、`players` のヘビがあと 1 マスで盤面を埋める状態にする。
+/// 最初のマスにはお邪魔ブロックを置き、最後のマスだけを空け、頭はその手前で右を向く
+fn env_one_cell_before_filled(players: &[usize], growth: u32) -> GameEnv {
+    let mut r = rules();
+    (r.width, r.height) = (5, 5);
+    let mut env = empty_env_with(r);
+    let path = serpentine(5, 5);
+    let body: Vec<Position> = path[1..24].iter().rev().copied().collect();
+    for &p in players {
+        env.fields[p].obstacles.push(path[0]);
+        set_body(&mut env, p, &body, Direction::Right);
+        env.fields[p].snake.pending_growth = growth;
+    }
+    env
+}
+
+#[test]
+fn filling_all_cells_except_obstacles_wins() {
+    let mut env = env_one_cell_before_filled(&[0], 1);
+    env.fields[1].snake.score = 10;
+    move_once(&mut env, None);
+    let result = env.result.expect("試合が終わっていない");
+    assert_eq!(result.winner, Some(0));
+    assert_eq!(result.reason, EndReason::Filled);
+
+    // 伸びる予定が無ければ尻尾が退くので、埋まらずに続く
+    let mut env = env_one_cell_before_filled(&[0], 0);
+    move_once(&mut env, None);
+    assert!(!env.is_over());
+}
+
+#[test]
+fn simultaneous_fills_are_decided_by_score() {
+    for (scores, winner) in [([2, 5], Some(1)), ([4, 4], None)] {
+        let mut env = env_one_cell_before_filled(&[0, 1], 1);
+        for p in 0..2 {
+            env.fields[p].snake.score = scores[p];
+        }
+        move_once(&mut env, None);
+        let result = env.result.expect("試合が終わっていない");
+        assert_eq!(result.winner, winner);
+        assert_eq!(result.reason, EndReason::Filled);
+    }
+}
+
 #[test]
 fn time_up_is_decided_by_score() {
     let mut r = rules();

@@ -47,6 +47,11 @@ export class Field {
     }
   }
 
+  /** 生きているヘビが、お邪魔ブロック以外のすべてのマスを埋めているか */
+  isFilled(rules: Rules): boolean {
+    return this.snake.alive && this.snake.length + this.obstacles.length === rules.width * rules.height;
+  }
+
   static inBounds(pos: Position, rules: Rules): boolean {
     return pos.x >= 0 && pos.x < rules.width && pos.y >= 0 && pos.y < rules.height;
   }

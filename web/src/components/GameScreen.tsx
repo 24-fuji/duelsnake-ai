@@ -274,6 +274,10 @@ function overlayMessage(status: Status, env: GameEnv, names: string[], layout: L
   let reason: string;
   if (result.reason === "time_up") {
     reason = "時間切れ・スコア判定";
+  } else if (result.reason === "filled") {
+    reason = env.fields.every((f) => f.isFilled(env.rules))
+      ? "両者が盤面を埋めた・スコア判定"
+      : `${names[result.winner!]}が盤面を埋めた`;
   } else if (env.fields.every((f) => !f.snake.alive)) {
     reason = "両者衝突・スコア判定";
   } else {

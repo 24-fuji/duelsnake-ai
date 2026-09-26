@@ -175,6 +175,53 @@ describe("ルール", () => {
     }
   });
 
+  /** 盤面のすべてのマスを、左上から 1 行ごとに折り返してたどる順に並べる */
+  function serpentine(width: number, height: number): Position[] {
+    return Array.from({ length: width * height }, (_, i) => {
+      const [y, k] = [Math.floor(i / width), i % width];
+      return pos(y % 2 === 0 ? k : width - 1 - k, y);
+    });
+  }
+
+  /**
+   * 5 × 5 の盤面で、`players` のヘビがあと 1 マスで盤面を埋める状態にする。
+   * 最初のマスにはお邪魔ブロックを置き、最後のマスだけを空け、頭はその手前で右を向く
+   */
+  function envOneCellBeforeFilled(players: number[], growth: number): GameEnv {
+    const env = emptyEnv({ ...baseRules(), width: 5, height: 5 });
+    const path = serpentine(5, 5);
+    for (const p of players) {
+      env.fields[p].obstacles.push(path[0]);
+      setBody(env, p, path.slice(1, 24).reverse(), "right");
+      env.fields[p].snake.pendingGrowth = growth;
+    }
+    return env;
+  }
+
+  it("お邪魔ブロック以外のすべてのマスを埋めたら勝ち", () => {
+    const env = envOneCellBeforeFilled([0], 1);
+    env.fields[1].snake.score = 10;
+    moveOnce(env);
+    expect(env.result).toEqual({ winner: 0, reason: "filled" });
+
+    // 伸びる予定が無ければ尻尾が退くので、埋まらずに続く
+    const noGrowth = envOneCellBeforeFilled([0], 0);
+    moveOnce(noGrowth);
+    expect(noGrowth.isOver).toBe(false);
+  });
+
+  it("同時に埋めたらスコアで決める", () => {
+    for (const [scores, winner] of [
+      [[2, 5], 1],
+      [[4, 4], null],
+    ] as const) {
+      const env = envOneCellBeforeFilled([0, 1], 1);
+      for (const p of [0, 1]) env.fields[p].snake.score = scores[p];
+      moveOnce(env);
+      expect(env.result).toEqual({ winner, reason: "filled" });
+    }
+  });
+
   it("時間切れはスコアで決める", () => {
     const env = emptyEnv({ ...baseRules(), normalIntervalTicks: 10_000 });
     env.fields[0].snake.score = 3;

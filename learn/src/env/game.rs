@@ -46,6 +46,8 @@ impl Action {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndReason {
+    /// お邪魔ブロック以外のすべてのマスをヘビで埋めた
+    Filled,
     Death,
     TimeUp,
 }
@@ -140,15 +142,20 @@ impl GameEnv {
     }
 
     fn judge(&self) -> Option<GameResult> {
-        let alive = [self.fields[0].snake.alive, self.fields[1].snake.alive];
-        let (winner, reason) = match alive {
-            [true, false] => (Some(0), EndReason::Death),
-            [false, true] => (Some(1), EndReason::Death),
-            [false, false] => (self.leader_by_score(), EndReason::Death),
-            [true, true] if self.tick >= self.rules.time_limit_ticks => {
+        let filled = self.fields.each_ref().map(|f| f.is_filled(&self.rules));
+        let alive = self.fields.each_ref().map(|f| f.snake.alive);
+        let (winner, reason) = match (filled, alive) {
+            // 盤面を埋めたら、相手の生死やスコアに関わらず勝ち
+            ([true, false], _) => (Some(0), EndReason::Filled),
+            ([false, true], _) => (Some(1), EndReason::Filled),
+            ([true, true], _) => (self.leader_by_score(), EndReason::Filled),
+            (_, [true, false]) => (Some(0), EndReason::Death),
+            (_, [false, true]) => (Some(1), EndReason::Death),
+            (_, [false, false]) => (self.leader_by_score(), EndReason::Death),
+            _ if self.tick >= self.rules.time_limit_ticks => {
                 (self.leader_by_score(), EndReason::TimeUp)
             }
-            [true, true] => return None,
+            _ => return None,
         };
         Some(GameResult { winner, reason })
     }
