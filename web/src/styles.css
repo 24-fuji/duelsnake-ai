@@ -297,3 +297,20 @@ input[type="file"] {
 .solo-result.wasted {
   color: #ef5350;
 }
+
+/* クリアしたときのクリア時間と取ったリンゴの数 */
+.overlay .solo-detail {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+/* 狭い画面では、リンゴの種類ごとに折り返す */
+.solo-apple {
+  white-space: nowrap;
+}
+
+/* 一人モードの制限時間。値の文字数が変わっても設定欄がずれないよう幅を取っておく */
+.time-limit-value {
+  min-width: 5.5em;
+  font-variant-numeric: tabular-nums;
+}

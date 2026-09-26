@@ -96,6 +96,11 @@ describe("ルール", () => {
     const snake = env.fields[0].snake;
     expect([snake.score, snake.length, snake.pendingGrowth]).toEqual([1, 3, 1]);
     expect(env.fields[0].items).toEqual([]);
+    expect(env.fields[0].eaten).toBe("normal_apple");
+
+    // 取ったことが残るのは、取ったティックだけ
+    env.step(none);
+    expect(env.fields[0].eaten).toBeNull();
 
     moveOnce(env);
     expect(env.fields[0].snake.length).toBe(4);

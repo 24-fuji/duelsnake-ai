@@ -9,8 +9,8 @@ import { SoloEnv } from "./solo";
 const baseRules = (): Rules => rulesFromConfig(modelFile.game as GameRules);
 
 /** リンゴの無い盤面で始める */
-function emptySolo(rules: Rules = baseRules()): SoloEnv {
-  const env = new SoloEnv(rules);
+function emptySolo(rules: Rules = baseRules(), timeLimitSeconds?: number): SoloEnv {
+  const env = new SoloEnv(rules, timeLimitSeconds);
   env.field.items = [];
   return env;
 }
@@ -75,11 +75,38 @@ describe("一人モード", () => {
     expect(env.result).toBe("filled");
   });
 
-  it("制限時間で終わる", () => {
-    const env = emptySolo({ ...baseRules(), normalIntervalTicks: 10_000 });
-    for (let i = 0; i < 299; i++) env.step([]);
+  it("制限時間で終わる。既定は対戦と同じ 30 秒", () => {
+    const still = { ...baseRules(), normalIntervalTicks: 10_000 };
+    for (const [limit, ticks] of [
+      [undefined, 300],
+      [90, 900],
+    ] as const) {
+      const env = emptySolo(still, limit);
+      for (let i = 0; i < ticks - 1; i++) env.step([]);
+      expect(env.isOver).toBe(false);
+      env.step([]);
+      expect(env.result).toBe("time_up");
+    }
+  });
+
+  it("制限時間 0 は制限なし", () => {
+    const env = emptySolo({ ...baseRules(), normalIntervalTicks: 10_000 }, 0);
+    for (let i = 0; i < 5000; i++) env.step([]);
     expect(env.isOver).toBe(false);
-    env.step([]);
-    expect(env.result).toBe("time_up");
+    expect(env.remainingTicks).toBeNull();
+    expect(env.elapsedSeconds).toBeCloseTo(500);
+  });
+
+  it("取ったリンゴを種類ごとに数える", () => {
+    const env = emptySolo();
+    env.field.items.push(
+      { pos: pos(8, 7), kind: "normal_apple" },
+      { pos: pos(8, 6), kind: "gold_apple" },
+      { pos: pos(8, 5), kind: "normal_apple" },
+      { pos: pos(8, 4), kind: "poison_apple" },
+    );
+    for (let i = 0; i < 4; i++) moveOnce(env);
+    const { normal_apple, gold_apple, poison_apple } = env.eatenCounts;
+    expect([normal_apple, gold_apple, poison_apple]).toEqual([2, 1, 1]);
   });
 });

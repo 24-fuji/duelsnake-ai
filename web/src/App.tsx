@@ -4,8 +4,13 @@ import { BUNDLED_MODELS } from "./ai/catalog";
 import { SnakeModel, type ModelFile } from "./ai/model";
 import { itemColor } from "./components/draw";
 import { GameScreen, type Layout, type Mode } from "./components/GameScreen";
-import { SoloScreen } from "./components/SoloScreen";
-import { SOLO_POISON_GROW, SOLO_POISON_MULTIPLIER } from "./game/solo";
+import { formatTimeLimit, SoloScreen } from "./components/SoloScreen";
+import {
+  SOLO_DEFAULT_TIME_LIMIT,
+  SOLO_POISON_GROW,
+  SOLO_POISON_MULTIPLIER,
+  SOLO_TIME_LIMITS,
+} from "./game/solo";
 
 /** 最初に選ぶ盤面。そのモデルが無ければ一覧の先頭を選ぶ */
 const DEFAULT_BOARD = "16x16";
@@ -52,6 +57,8 @@ export function App() {
   );
   const [mode, setMode] = useState<PlayMode>("human_vs_ai");
   const solo = mode === "solo";
+  /** 一人モードの制限時間 (秒)。0 は制限なし */
+  const [soloTimeLimit, setSoloTimeLimit] = useState(SOLO_DEFAULT_TIME_LIMIT);
   const [difficulty, setDifficulty] = useState("hard");
   const [speed, setSpeed] = useState(1);
   const [autoRestart, setAutoRestart] = useState(true);
@@ -128,6 +135,28 @@ export function App() {
               <option value="solo">一人モード</option>
             </select>
           </label>
+          {solo && (
+            <label>
+              制限時間
+              <input
+                type="range"
+                min={0}
+                max={SOLO_TIME_LIMITS.length - 1}
+                step={1}
+                list="solo-time-limits"
+                value={SOLO_TIME_LIMITS.indexOf(soloTimeLimit)}
+                onChange={(e) => setSoloTimeLimit(SOLO_TIME_LIMITS[Number(e.target.value)])}
+                // マウスで動かしたあともフォーカスが残ると、Enter や矢印キーをゲームに渡せないので外す
+                onPointerUp={(e) => e.currentTarget.blur()}
+              />
+              <datalist id="solo-time-limits">
+                {SOLO_TIME_LIMITS.map((_, i) => (
+                  <option key={i} value={i} />
+                ))}
+              </datalist>
+              <span className="time-limit-value">{formatTimeLimit(soloTimeLimit)}</span>
+            </label>
+          )}
           <label>
             難易度
             <select value={difficulty} disabled={solo} onChange={(e) => setDifficulty(e.target.value)}>
@@ -193,7 +222,12 @@ export function App() {
       {!current ? (
         !error && <p>モデルを読み込み中...</p>
       ) : mode === "solo" ? (
-        <SoloScreen key={`${current.id}-solo`} game={current.model.info.game} layout={layout} />
+        <SoloScreen
+          key={`${current.id}-solo-${soloTimeLimit}`}
+          game={current.model.info.game}
+          timeLimitSeconds={soloTimeLimit}
+          layout={layout}
+        />
       ) : (
         <GameScreen
           key={`${current.id}-${mode}-${difficulty}`}
@@ -239,7 +273,7 @@ export function App() {
         {solo && (
           <p>
             一人モード: ブロック消去とお邪魔は出ず、毒リンゴが対戦の {SOLO_POISON_MULTIPLIER} 倍出ます。
-            盤面をすべて埋めるとクリアです。
+            盤面をすべて埋めるとクリアです。制限時間は「制限時間」のバーで選べます (左端は制限なし)。
           </p>
         )}
         <p>

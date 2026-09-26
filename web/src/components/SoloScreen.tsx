@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ItemType } from "../game/field";
 import type { Action } from "../game/game";
 import { rulesFromConfig, type GameRules } from "../game/rules";
 import { SoloEnv, type SoloEndReason } from "../game/solo";
 import { Board } from "./Board";
-import { PLAYER_PALETTES } from "./draw";
+import { itemColor, PLAYER_PALETTES } from "./draw";
 import { KEY_ACTIONS, type Layout } from "./GameScreen";
 import { useGestures, type Gesture } from "./gestures";
 import { PlayerPanel } from "./PlayerPanel";
@@ -22,18 +23,41 @@ const RESULT_WORDS: Partial<Record<SoloEndReason, "success" | "wasted">> = {
   death: "wasted",
 };
 
+/** クリアしたときに数を出すリンゴ */
+const APPLE_LABELS: [ItemType, string][] = [
+  ["normal_apple", "リンゴ"],
+  ["gold_apple", "金のリンゴ"],
+  ["poison_apple", "毒リンゴ"],
+];
+
+/** 秒数を「1 分 23.4 秒」のように表す (1 分未満は「23.4 秒」) */
+function formatSeconds(seconds: number): string {
+  const tenths = Math.round(seconds * 10);
+  const [minutes, rest] = [Math.floor(tenths / 600), (tenths % 600) / 10];
+  return minutes > 0 ? `${minutes} 分 ${rest.toFixed(1)} 秒` : `${rest.toFixed(1)} 秒`;
+}
+
+/** 制限時間の選択肢の表示。0 は「なし」、それ以外は「1 分 30 秒」のように表す */
+export function formatTimeLimit(seconds: number): string {
+  if (seconds === 0) return "なし";
+  const [minutes, rest] = [Math.floor(seconds / 60), seconds % 60];
+  return [minutes > 0 ? `${minutes} 分` : "", rest > 0 ? `${rest} 秒` : ""].filter(Boolean).join(" ");
+}
+
 interface Props {
   /** 対戦のルール (モデル JSON の game)。一人モードのルールに直して使う */
   game: GameRules;
+  /** 制限時間 (秒)。0 なら制限なし */
+  timeLimitSeconds: number;
   layout: Layout;
 }
 
 /** 一人モードの画面。AI の相手はおらず、自分の盤面だけで遊ぶ */
-export function SoloScreen({ game, layout }: Props) {
+export function SoloScreen({ game, timeLimitSeconds, layout }: Props) {
   const rules = useMemo(() => rulesFromConfig(game), [game]);
 
   const envRef = useRef<SoloEnv | null>(null);
-  if (envRef.current === null) envRef.current = new SoloEnv(rules);
+  if (envRef.current === null) envRef.current = new SoloEnv(rules, timeLimitSeconds);
   const inputsRef = useRef<Action[]>([]);
   const [status, setStatus] = useState<Status>("ready");
   const statusRef = useRef(status);
@@ -46,13 +70,13 @@ export function SoloScreen({ game, layout }: Props) {
   }, [status]);
 
   const start = useCallback(() => {
-    if (envRef.current?.isOver) envRef.current = new SoloEnv(rules);
+    if (envRef.current?.isOver) envRef.current = new SoloEnv(rules, timeLimitSeconds);
     inputsRef.current = [];
     // 設定欄などにフォーカスが残っていると矢印キーやスペースを奪われるので外す
     (document.activeElement as HTMLElement | null)?.blur?.();
     setStatus("running");
     setVersion((v) => v + 1);
-  }, [rules]);
+  }, [rules, timeLimitSeconds]);
 
   // ゲームループ: 経過時間に応じて決まった間隔でティックを進める
   useEffect(() => {
@@ -124,7 +148,11 @@ export function SoloScreen({ game, layout }: Props) {
 
   const env = envRef.current;
   const score = env.field.snake.score;
-  const remaining = (env.remainingTicks * env.rules.tickSeconds).toFixed(1);
+  const remainingTicks = env.remainingTicks;
+  const timer =
+    remainingTicks === null
+      ? `経過 ${formatSeconds(env.elapsedSeconds)} (制限なし)`
+      : `残り ${formatSeconds(remainingTicks * env.rules.tickSeconds)}`;
   const board = (
     <Board
       field={env.field}
@@ -142,6 +170,20 @@ export function SoloScreen({ game, layout }: Props) {
     <div className="overlay">
       {resultWord && <p className={`solo-result ${resultWord}`}>{resultWord}</p>}
       <p>{overlayMessage(status, env, layout)}</p>
+      {status === "over" && env.result === "filled" && (
+        <>
+          <p className="solo-detail">クリア時間 {formatSeconds(env.elapsedSeconds)}</p>
+          <p className="solo-detail">
+            取ったリンゴ
+            {APPLE_LABELS.map(([kind, label]) => (
+              <span key={kind} className="solo-apple">
+                <span className="dot" style={{ background: itemColor(kind) }} />
+                {label} {env.eatenCounts[kind]} 個
+              </span>
+            ))}
+          </p>
+        </>
+      )}
       {status === "over" && <p className="hint">最高スコア {best}</p>}
       {layout === "mobile" && status === "over" && <p className="hint">タップでもう一度</p>}
     </div>
@@ -152,7 +194,7 @@ export function SoloScreen({ game, layout }: Props) {
       <div className="game mobile">
         <div className="mobile-top">
           <div className="mobile-status">
-            <span className="timer">残り {remaining} 秒</span>
+            <span className="timer">{timer}</span>
             <span>スコア {score}</span>
             <span className="tally">最高スコア {best}</span>
             {status === "running" ? (
@@ -174,7 +216,7 @@ export function SoloScreen({ game, layout }: Props) {
   return (
     <div className="game">
       <div className="topbar">
-        <span className="timer">残り {remaining} 秒</span>
+        <span className="timer">{timer}</span>
         <span className="tally">最高スコア {best}</span>
         {status === "running" ? (
           <button onClick={() => setStatus("paused")}>一時停止 (P)</button>

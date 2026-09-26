@@ -32,6 +32,8 @@ export class Field {
   pendingSpawns: PendingSpawn[] = [];
   /** 相手から送られたお邪魔ブロックの出現待ち (残りティック数) */
   incomingJams: number[] = [];
+  /** 直前のティックに取ったアイテム。ゲームの進行には使わない */
+  eaten: ItemType | null = null;
 
   /** `heldItems` が false なら、所持アイテム (ブロック消去・お邪魔) を置かずリンゴだけにする */
   constructor(rules: Rules, pick: Picker, heldItems = true) {
@@ -123,6 +125,7 @@ export class Field {
 
   /** ヘビのタイマーを進め、移動するティックなら移動・衝突判定・アイテム取得まで行う */
   updateSnake(rules: Rules): void {
+    this.eaten = null;
     const snake = this.snake;
     if (!snake.alive || !snake.advanceTimers(rules)) return;
 
@@ -137,6 +140,7 @@ export class Field {
     if (idx >= 0) {
       const [item] = this.items.splice(idx, 1);
       this.consume(item.kind, rules);
+      this.eaten = item.kind;
     }
   }
 
