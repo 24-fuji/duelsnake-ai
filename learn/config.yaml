@@ -84,6 +84,9 @@ train:
   grad_clip_norm: 10.0
   log_interval_seconds: 30 # この秒数ごとに統計を log/train-*.log と .csv に書き出す
   save_interval_games: 10000
+  # --auto-commit を付けたとき (just train / just train-resume)、通算試合数がこの数の倍数を越えるごとに
+  # 最新モデルを保存し、"model update" で git にコミットしてプッシュする
+  commit_interval_games: 100000
 
 # --- 書き出し ---
 export:

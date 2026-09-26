@@ -6,6 +6,7 @@ use crate::env::observation::{self, GRID_CHANNELS, VECTOR_FEATURES};
 use crate::env::rules::Rules;
 use crate::export::{self, ModelFile, TrainingInfo};
 use crate::force::ForceField;
+use crate::git;
 use crate::model::{NetworkSpec, QNetwork};
 use crate::monitor::{approx_count, hms, thousands, StatsRow, StatusLine, TrainLog};
 use crate::replay::{NStepBuilder, Obs, ReplayBuffer};
@@ -16,6 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tch::nn::OptimizerConfig;
 use tch::{nn, Device, Kind, Reduction, Tensor};
+
+/// 自動コミットのコミットメッセージ
+const MODEL_COMMIT_MESSAGE: &str = "model update";
 
 pub struct OutputPaths {
     pub recent_model: PathBuf,
@@ -201,11 +205,13 @@ impl Trainer {
         running: &AtomicBool,
         max_games: Option<u64>,
         paths: &OutputPaths,
+        auto_commit: bool,
         log: &mut TrainLog,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let started = Instant::now();
         let session_start = self.info.games;
         let save_interval = self.config.train.save_interval_games;
+        let commit_interval = self.config.train.commit_interval_games;
         let log_interval = Duration::from_secs(self.config.train.log_interval_seconds);
         let mut stats = WindowStats::new();
         let mut status = StatusLine::new();
@@ -221,13 +227,27 @@ impl Trainer {
                 log.stats(&self.stats_row(&stats))?;
                 stats = WindowStats::new();
             }
-            if self.info.games / save_interval > games_before / save_interval {
+            let crossed = |interval: u64| self.info.games / interval > games_before / interval;
+            let commit_due = auto_commit && crossed(commit_interval);
+            if crossed(save_interval) || commit_due {
                 self.save(&paths.recent_model)?;
                 let message = format!(
                     "途中経過を保存しました ({} 試合): {}",
                     thousands(self.info.games),
                     paths.recent_model.display()
                 );
+                status.message(&message);
+                log.event(&message)?;
+            }
+            if commit_due {
+                let message = match git::commit_and_push(&paths.recent_model, MODEL_COMMIT_MESSAGE)
+                {
+                    Ok(()) => format!(
+                        "最新モデルをコミットしてプッシュしました ({} 試合)",
+                        thousands(self.info.games)
+                    ),
+                    Err(e) => format!("警告: 最新モデルをコミット・プッシュできませんでした: {e}"),
+                };
                 status.message(&message);
                 log.event(&message)?;
             }

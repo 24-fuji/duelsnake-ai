@@ -2,6 +2,7 @@ mod config;
 mod env;
 mod export;
 mod force;
+mod git;
 mod model;
 mod monitor;
 mod replay;
@@ -11,7 +12,7 @@ use clap::Parser;
 use config::Config;
 use env::observation::{GRID_CHANNELS, VECTOR_FEATURES};
 use export::ModelFile;
-use monitor::TrainLog;
+use monitor::{thousands, TrainLog};
 use replay::ReplayBuffer;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,6 +49,10 @@ struct Cli {
     /// 乱数シード [既定: ランダム]
     #[arg(long)]
     seed: Option<u64>,
+    /// 通算試合数が config の train.commit_interval_games の倍数を越えるごとに、
+    /// 最新モデルを "model update" で git にコミットしてプッシュする
+    #[arg(long)]
+    auto_commit: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -128,6 +133,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             force.poison_apple_repulsion, force.jam_block_repulsion, force.repulsion_range
         ),
     ];
+    if cli.auto_commit {
+        lines.push(format!(
+            "  自動コミット: 通算 {} 試合ごとに最新モデルをコミットしてプッシュ",
+            thousands(config.train.commit_interval_games)
+        ));
+    }
     if resumed.games > 0 {
         lines.push(format!(
             "  再開時点   : {} 試合 / {} 判断 / {} 更新",
@@ -159,7 +170,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         recent_model,
         backup_dir: out_dir.join("models"),
     };
-    trainer.run(&running, cli.games, &paths, &mut log)?;
+    trainer.run(&running, cli.games, &paths, cli.auto_commit, &mut log)?;
     println!("学習を終了しました");
     log.event("学習を終了しました")?;
     Ok(())

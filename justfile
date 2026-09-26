@@ -6,12 +6,14 @@ build-learn:
     cd learn && cargo build --release
 
 # 自己対戦で学習する。Ctrl+C で中断するとモデルを保存 (オプションは `just train --help`)
+# 通算 10 万試合 (train.commit_interval_games) ごとに最新モデルを "model update" でコミットしてプッシュする
 train *ARGS:
-    cd learn && cargo run --release -- {{ARGS}}
+    cd learn && cargo run --release -- --auto-commit {{ARGS}}
 
 # config.yaml の盤面サイズのモデル (model/recent-model/snake-model-<幅>x<高さ>.json) から学習を再開する。無ければ警告を出して新しく学習する
+# train と同じく、通算 10 万試合ごとに最新モデルをコミットしてプッシュする
 train-resume *ARGS:
-    cd learn && cargo run --release -- --resume {{ARGS}}
+    cd learn && cargo run --release -- --resume --auto-commit {{ARGS}}
 
 # 学習中の最新ログを表示し続ける (学習とは別の端末で実行する)
 train-watch:
