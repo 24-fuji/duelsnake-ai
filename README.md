@@ -18,7 +18,8 @@ Human vs AI リアルタイム対戦型スネークゲーム。
 ```sh
 just train                # Ctrl+C で中断すると model/ に保存して終了
 just train --games 50000  # 指定した試合数で終了
-just train-resume         # 同じ盤面サイズの最新モデルから再開
+just train --commit-on-interrupt  # Ctrl+C で中断したら、保存した最新モデルをコミットしてプッシュする
+just train-resume         # 同じ盤面サイズの最新モデルから再開 (--commit-on-interrupt も使える)
 just train-watch          # 学習中のログを表示し続ける (別の端末で実行)
 just test                 # ルールとモデル書き出しのテスト
 ```
@@ -28,6 +29,7 @@ just test                 # ルールとモデル書き出しのテスト
 `just train-resume` は config.yaml と同じ盤面サイズのモデルから再開し、そのモデルが無ければ警告を出して新しく学習を始めます。
 
 `just train` と `just train-resume` は、モデルの通算試合数が 10 万の倍数を越えるごとに、最新モデルを保存して `model update` というメッセージで git にコミットし、プッシュします。
+`--commit-on-interrupt` を付けると、Ctrl+C で中断して保存したあとにも同じようにコミットしてプッシュします (`--games` で指定した試合数を終えて止まったときはコミットしません)。
 コミットに入るのはそのモデルのファイルだけで、ほかにステージしてある変更は含めません。
 通算試合数はモデルごとに数え、`just train-resume` では再開元から続けて、`just train` では 0 から数えます。
 間隔は `learn/config.yaml` の `train.commit_interval_games` で変えられます。コミットやプッシュに失敗しても学習は止めず、ログに警告を残します。

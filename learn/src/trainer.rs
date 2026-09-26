@@ -21,6 +21,15 @@ use tch::{nn, Device, Kind, Reduction, Tensor};
 /// 自動コミットのコミットメッセージ
 const MODEL_COMMIT_MESSAGE: &str = "model update";
 
+/// 最新モデルを git にコミットしてプッシュするタイミング
+#[derive(Debug, Clone, Copy)]
+pub struct CommitPolicy {
+    /// 通算試合数が train.commit_interval_games の倍数を越えるごと
+    pub periodic: bool,
+    /// Ctrl+C で中断し、モデルを保存したあと
+    pub on_interrupt: bool,
+}
+
 pub struct OutputPaths {
     pub recent_model: PathBuf,
     pub backup_dir: PathBuf,
@@ -205,7 +214,7 @@ impl Trainer {
         running: &AtomicBool,
         max_games: Option<u64>,
         paths: &OutputPaths,
-        auto_commit: bool,
+        commit: CommitPolicy,
         log: &mut TrainLog,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let started = Instant::now();
@@ -228,7 +237,7 @@ impl Trainer {
                 stats = WindowStats::new();
             }
             let crossed = |interval: u64| self.info.games / interval > games_before / interval;
-            let commit_due = auto_commit && crossed(commit_interval);
+            let commit_due = commit.periodic && crossed(commit_interval);
             if crossed(save_interval) || commit_due {
                 self.save(&paths.recent_model)?;
                 let message = format!(
@@ -240,14 +249,7 @@ impl Trainer {
                 log.event(&message)?;
             }
             if commit_due {
-                let message = match git::commit_and_push(&paths.recent_model, MODEL_COMMIT_MESSAGE)
-                {
-                    Ok(()) => format!(
-                        "最新モデルをコミットしてプッシュしました ({} 試合)",
-                        thousands(self.info.games)
-                    ),
-                    Err(e) => format!("警告: 最新モデルをコミット・プッシュできませんでした: {e}"),
-                };
+                let message = self.commit_recent_model(paths);
                 status.message(&message);
                 log.event(&message)?;
             }
@@ -256,7 +258,8 @@ impl Trainer {
             }
         }
 
-        if !running.load(Ordering::SeqCst) {
+        let interrupted = !running.load(Ordering::SeqCst);
+        if interrupted {
             let message =
                 "中断しました。モデルを保存しています... (もう一度 Ctrl+C で保存せずに終了)";
             status.message(message);
@@ -288,7 +291,24 @@ impl Trainer {
             println!("{message}");
             log.event(message)?;
         }
+        if interrupted && commit.on_interrupt {
+            println!("最新モデルをコミットしてプッシュしています...");
+            let message = self.commit_recent_model(paths);
+            println!("{message}");
+            log.event(&message)?;
+        }
         Ok(())
+    }
+
+    /// 最新モデルを git にコミットしてプッシュし、結果を知らせる文を返す。失敗しても学習は止めない
+    fn commit_recent_model(&self, paths: &OutputPaths) -> String {
+        match git::commit_and_push(&paths.recent_model, MODEL_COMMIT_MESSAGE) {
+            Ok(()) => format!(
+                "最新モデルをコミットしてプッシュしました ({} 試合)",
+                thousands(self.info.games)
+            ),
+            Err(e) => format!("警告: 最新モデルをコミット・プッシュできませんでした: {e}"),
+        }
     }
 
     /// 最下行に出す状況。試合数は同時対戦の都合で端数が意味を持たないので概数にする

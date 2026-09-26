@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tch::Device;
-use trainer::{OutputPaths, Trainer};
+use trainer::{CommitPolicy, OutputPaths, Trainer};
 
 const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -53,6 +53,9 @@ struct Cli {
     /// 最新モデルを "model update" で git にコミットしてプッシュする
     #[arg(long)]
     auto_commit: bool,
+    /// Ctrl+C で中断したとき、保存した最新モデルを "model update" で git にコミットしてプッシュする
+    #[arg(long)]
+    commit_on_interrupt: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -139,6 +142,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             thousands(config.train.commit_interval_games)
         ));
     }
+    if cli.commit_on_interrupt {
+        lines
+            .push("  中断時     : Ctrl+C で中断したら最新モデルをコミットしてプッシュ".to_string());
+    }
     if resumed.games > 0 {
         lines.push(format!(
             "  再開時点   : {} 試合 / {} 判断 / {} 更新",
@@ -154,7 +161,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  詳しいログ : {} (別の端末で `just train-watch` を実行すると追えます)",
         log.text_path().display()
     );
-    println!("Ctrl+C で中断するとモデルを保存して終了します");
+    let on_stop = if cli.commit_on_interrupt {
+        "保存し、コミットしてプッシュして"
+    } else {
+        "保存して"
+    };
+    println!("Ctrl+C で中断するとモデルを{on_stop}終了します");
 
     let running = Arc::new(AtomicBool::new(true));
     let flag = running.clone();
@@ -170,7 +182,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         recent_model,
         backup_dir: out_dir.join("models"),
     };
-    trainer.run(&running, cli.games, &paths, cli.auto_commit, &mut log)?;
+    let commit = CommitPolicy {
+        periodic: cli.auto_commit,
+        on_interrupt: cli.commit_on_interrupt,
+    };
+    trainer.run(&running, cli.games, &paths, commit, &mut log)?;
     println!("学習を終了しました");
     log.event("学習を終了しました")?;
     Ok(())

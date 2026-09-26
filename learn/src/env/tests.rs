@@ -7,9 +7,12 @@ use crate::config::Config;
 use std::collections::VecDeque;
 use std::path::Path;
 
+/// config.yaml のルール。盤面の座標などは 16x16 で書いているので、学習する盤面の大きさによらず 16x16 にする
 fn rules() -> Rules {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("config.yaml");
-    Rules::from_config(&Config::load(&path).unwrap().game)
+    let mut rules = Rules::from_config(&Config::load(&path).unwrap().game);
+    (rules.width, rules.height) = (16, 16);
+    rules
 }
 
 /// アイテムの無い盤面で始める
