@@ -13,7 +13,7 @@ export type Mode = "human_vs_ai" | "ai_vs_ai";
 export type Layout = "pc" | "mobile";
 type Status = "ready" | "running" | "paused" | "over";
 
-const KEY_ACTIONS: Record<string, Action> = {
+export const KEY_ACTIONS: Record<string, Action> = {
   ArrowUp: "up",
   KeyW: "up",
   ArrowDown: "down",

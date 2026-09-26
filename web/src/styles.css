@@ -281,3 +281,19 @@ input[type="file"] {
   font-size: 16px;
   font-weight: normal;
 }
+
+/* 一人モードの結果。勝てば success、負ければ wasted を大きく出す */
+.overlay .solo-result {
+  margin: 0;
+  font-size: 64px;
+  letter-spacing: 0.06em;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+}
+
+.solo-result.success {
+  color: #fdd835;
+}
+
+.solo-result.wasted {
+  color: #ef5350;
+}

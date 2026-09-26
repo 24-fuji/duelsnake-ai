@@ -33,14 +33,14 @@ export class Field {
   /** 相手から送られたお邪魔ブロックの出現待ち (残りティック数) */
   incomingJams: number[] = [];
 
-  constructor(rules: Rules, pick: Picker) {
+  /** `heldItems` が false なら、所持アイテム (ブロック消去・お邪魔) を置かずリンゴだけにする */
+  constructor(rules: Rules, pick: Picker, heldItems = true) {
     this.snake = new Snake({ x: Math.floor(rules.width / 2), y: Math.floor(rules.height / 2) }, rules);
     const initial: ItemType[] = [
       ...Array<ItemType>(rules.normalApples).fill("normal_apple"),
       ...Array<ItemType>(rules.poisonApples).fill("poison_apple"),
       "gold_apple",
-      "block_clear",
-      "block_jam",
+      ...(heldItems ? (["block_clear", "block_jam"] as const) : []),
     ];
     for (const kind of initial) {
       this.spawnItem(kind, rules, pick);
