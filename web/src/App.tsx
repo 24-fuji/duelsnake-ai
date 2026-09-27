@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { assertModelCompatible } from "./ai/agent";
 import { BUNDLED_MODELS } from "./ai/catalog";
 import { SnakeModel, type ModelFile } from "./ai/model";
-import { itemColor } from "./components/draw";
+import { itemImageUrl } from "./components/draw";
 import { GameScreen, type Layout, type Mode } from "./components/GameScreen";
 import { formatTimeLimit, SoloScreen } from "./components/SoloScreen";
 import {
@@ -259,14 +259,16 @@ export function App() {
           </ul>
         )}
         <p>
-          アイテム: <span className="dot" style={{ background: itemColor("normal_apple") }} />
-          リンゴ (+1) <span className="dot" style={{ background: itemColor("gold_apple") }} />
-          金のリンゴ (+3) <span className="dot" style={{ background: itemColor("poison_apple") }} />
+          アイテム: <img className="item-icon" src={itemImageUrl("normal_apple")} alt="" />
+          リンゴ (+1) <img className="item-icon" src={itemImageUrl("gold_apple")} alt="" />
+          金のリンゴ (+3) <img className="item-icon" src={itemImageUrl("poison_apple")} alt="" />
           {solo ? (
             <>毒リンゴ (-1, {-SOLO_POISON_GROW} マス縮む)</>
           ) : (
             <>
-              毒リンゴ (-1, 縮む) <b>C</b> ブロック消去 <b>J</b> お邪魔 (相手にブロックを送る)
+              毒リンゴ (-1, 縮む) <img className="item-icon" src={itemImageUrl("block_clear")} alt="" />
+              ブロック消去 <img className="item-icon" src={itemImageUrl("block_jam")} alt="" />
+              お邪魔 (相手にブロックを送る)
             </>
           )}
         </p>

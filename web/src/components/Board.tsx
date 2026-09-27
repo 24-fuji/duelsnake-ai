@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Field } from "../game/field";
 import type { Rules } from "../game/rules";
-import { drawField, type Palette } from "./draw";
+import { drawField, loadBoardImages, type Palette } from "./draw";
 
 /** 盤面の幅と高さがおよそこのピクセル数に収まるようにマスの大きさを決める (16 マスなら 24px) */
 const BOARD_PIXELS = 384;
@@ -25,6 +25,15 @@ interface Props {
 export function Board({ field, rules, palette, version, cellSize, fill = false }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [fillWidth, setFillWidth] = useState(0);
+  const [imagesLoaded, setImagesLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void loadBoardImages().then(() => active && setImagesLoaded(true));
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -43,7 +52,7 @@ export function Board({ field, rules, palette, version, cellSize, fill = false }
     if (!ctx || cell <= 0) return;
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
     drawField(ctx, field, rules, cell, palette);
-  }, [field, rules, palette, version, cell, scale]);
+  }, [field, rules, palette, version, cell, scale, imagesLoaded]);
 
   return (
     <canvas
