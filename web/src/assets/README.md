@@ -11,4 +11,5 @@ const apple = new Image();
 apple.src = appleUrl;
 ```
 
-盤面の描画は今は図形で行っています ([components/draw.ts](../components/draw.ts))。画像に差し替えるときは、ここに PNG を置き、`draw.ts` の各関数を `ctx.drawImage` に置き換えてください。
+`items/` には盤面のアイテムとお邪魔ブロックの画像を置いています ([components/draw.ts](../components/draw.ts) が 1 マスに収めて描きます)。
+画像はどれも背景を透過し、余白を削った正方形の PNG (128px) です。差し替えるときも同じ形にしてください。余白が大きいとマスの中で小さく見えます。

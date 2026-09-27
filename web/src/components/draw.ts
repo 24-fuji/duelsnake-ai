@@ -1,8 +1,13 @@
 /**
- * 盤面の描画。今は図形で描いている。
- * 画像に差し替えるときは src/assets/ に PNG を置いて import し、各関数を drawImage に置き換える
+ * 盤面の描画。アイテムとお邪魔ブロックは src/assets/items/ の画像で、ヘビは図形で描く
  */
 
+import blockClearUrl from "../assets/items/block_clear.png";
+import blockJamUrl from "../assets/items/block_jam.png";
+import goldAppleUrl from "../assets/items/gold_apple.png";
+import normalAppleUrl from "../assets/items/normal_apple.png";
+import obstacleUrl from "../assets/items/obstacle.png";
+import poisonAppleUrl from "../assets/items/poison_apple.png";
 import type { Field, ItemType } from "../game/field";
 import type { Rules } from "../game/rules";
 import type { Direction } from "../game/snake";
@@ -19,18 +24,37 @@ export const PLAYER_PALETTES: readonly [Palette, Palette] = [
 
 const BACKGROUND = "#1b1f24";
 const GRID_LINE = "#262b33";
-const OBSTACLE = "#78909c";
 
-const ITEM_STYLE: Record<ItemType, { color: string; label?: string }> = {
-  normal_apple: { color: "#e53935" },
-  gold_apple: { color: "#fdd835" },
-  poison_apple: { color: "#8e24aa" },
-  block_clear: { color: "#26c6da", label: "C" },
-  block_jam: { color: "#ec407a", label: "J" },
+type Sprite = ItemType | "obstacle";
+
+/** 画像はどれも余白を削った正方形 */
+const SPRITE_URLS: Record<Sprite, string> = {
+  normal_apple: normalAppleUrl,
+  gold_apple: goldAppleUrl,
+  poison_apple: poisonAppleUrl,
+  block_clear: blockClearUrl,
+  block_jam: blockJamUrl,
+  obstacle: obstacleUrl,
 };
 
-export function itemColor(kind: ItemType): string {
-  return ITEM_STYLE[kind].color;
+export function itemImageUrl(kind: ItemType): string {
+  return SPRITE_URLS[kind];
+}
+
+const sprites = new Map<Sprite, HTMLImageElement>();
+let spritesLoading: Promise<void> | undefined;
+
+/** 盤面の画像を読み込む。読み込み終わるまでは画像を描かないので、終わったら描き直す */
+export function loadBoardImages(): Promise<void> {
+  spritesLoading ??= Promise.all(
+    (Object.keys(SPRITE_URLS) as Sprite[]).map((sprite) => {
+      const img = new Image();
+      img.src = SPRITE_URLS[sprite];
+      sprites.set(sprite, img);
+      return img.decode().catch(() => undefined);
+    }),
+  ).then(() => undefined);
+  return spritesLoading;
 }
 
 export function drawField(
@@ -49,17 +73,13 @@ export function drawField(
   for (let i = 1; i < rules.width; i++) line(ctx, i * cell + 0.5, 0, i * cell + 0.5, h);
   for (let i = 1; i < rules.height; i++) line(ctx, 0, i * cell + 0.5, w, i * cell + 0.5);
 
+  // 大きな画像を縮めて描くので、粗くならないよう高品質に補間する
+  ctx.imageSmoothingQuality = "high";
   for (const p of field.obstacles) {
-    ctx.fillStyle = OBSTACLE;
-    ctx.fillRect(p.x * cell + 1, p.y * cell + 1, cell - 2, cell - 2);
-    ctx.strokeStyle = "#37474f";
-    ctx.lineWidth = 2;
-    line(ctx, p.x * cell + 4, p.y * cell + 4, (p.x + 1) * cell - 4, (p.y + 1) * cell - 4);
-    line(ctx, (p.x + 1) * cell - 4, p.y * cell + 4, p.x * cell + 4, (p.y + 1) * cell - 4);
+    drawSprite(ctx, "obstacle", p.x * cell, p.y * cell, cell);
   }
-
   for (const item of field.items) {
-    drawItem(ctx, item.kind, item.pos.x * cell, item.pos.y * cell, cell);
+    drawSprite(ctx, item.kind, item.pos.x * cell, item.pos.y * cell, cell);
   }
 
   drawSnake(ctx, field, cell, palette);
@@ -72,21 +92,11 @@ function line(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number,
   ctx.stroke();
 }
 
-function drawItem(ctx: CanvasRenderingContext2D, kind: ItemType, x: number, y: number, cell: number): void {
-  const style = ITEM_STYLE[kind];
-  ctx.fillStyle = style.color;
-  if (style.label) {
-    ctx.fillRect(x + 3, y + 3, cell - 6, cell - 6);
-    ctx.fillStyle = "#102027";
-    ctx.font = `bold ${Math.floor(cell * 0.6)}px sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(style.label, x + cell / 2, y + cell / 2 + 1);
-  } else {
-    ctx.beginPath();
-    ctx.arc(x + cell / 2, y + cell / 2, cell * 0.38, 0, Math.PI * 2);
-    ctx.fill();
-  }
+/** マスの枠線にかからないよう 1px 内側に描く */
+function drawSprite(ctx: CanvasRenderingContext2D, sprite: Sprite, x: number, y: number, cell: number): void {
+  const img = sprites.get(sprite);
+  if (!img?.complete || img.naturalWidth === 0) return;
+  ctx.drawImage(img, x + 1, y + 1, cell - 2, cell - 2);
 }
 
 const EYE_OFFSET: Record<Direction, [number, number]> = {

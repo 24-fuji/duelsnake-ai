@@ -4,7 +4,7 @@ import type { Action } from "../game/game";
 import { rulesFromConfig, type GameRules } from "../game/rules";
 import { SoloEnv, type SoloEndReason } from "../game/solo";
 import { Board } from "./Board";
-import { itemColor, PLAYER_PALETTES } from "./draw";
+import { itemImageUrl, PLAYER_PALETTES } from "./draw";
 import { KEY_ACTIONS, type Layout } from "./GameScreen";
 import { useGestures, type Gesture } from "./gestures";
 import { PlayerPanel } from "./PlayerPanel";
@@ -177,7 +177,7 @@ export function SoloScreen({ game, timeLimitSeconds, layout }: Props) {
             取ったリンゴ
             {APPLE_LABELS.map(([kind, label]) => (
               <span key={kind} className="solo-apple">
-                <span className="dot" style={{ background: itemColor(kind) }} />
+                <img className="item-icon" src={itemImageUrl(kind)} alt="" />
                 {label} {env.eatenCounts[kind]} 個
               </span>
             ))}

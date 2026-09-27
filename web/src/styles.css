@@ -106,17 +106,18 @@ input[type="file"] {
   font-size: 18px;
 }
 
-.swatch,
-.dot {
+.swatch {
   display: inline-block;
   width: 12px;
   height: 12px;
   border-radius: 3px;
 }
 
-.dot {
-  border-radius: 50%;
+.item-icon {
+  width: 1.3em;
+  height: 1.3em;
   margin: 0 4px 0 8px;
+  vertical-align: -0.3em;
 }
 
 .dead {
