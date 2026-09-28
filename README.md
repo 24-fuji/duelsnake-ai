@@ -5,6 +5,7 @@ Human vs AI リアルタイム対戦型スネークゲーム。
 - `learn/`: Rustによる自己対戦強化学習 (Double DQN) とゲームシミュレータ
   - `config.yaml`: ゲームルール・ネットワーク構造・学習パラメータ
   - `RULES.md`: ゲームルールと AI の入出力仕様 (Web 版もこれに従う)
+  - `RUST_TUTORIAL.md`: learn/ のコードを教材にした Rust 入門 (文法・所有権・メモリ管理・強化学習の実装)
 - `model/`: 学習済みモデル (JSON)
   - `recent-model/snake-model-<幅>x<高さ>.json`: 盤面サイズごとの最新モデル。Web アプリはここにある盤面サイズから選べる
   - `models/`: 盤面サイズとタイムスタンプ付きのバックアップ (git 管理外)
