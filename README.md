@@ -10,6 +10,7 @@ Human vs AI リアルタイム対戦型スネークゲーム。
   - `recent-model/snake-model-<幅>x<高さ>.json`: 盤面サイズごとの最新モデル。Web アプリはここにある盤面サイズから選べる
   - `models/`: 盤面サイズとタイムスタンプ付きのバックアップ (git 管理外)
 - `web/`: Vite + React + TypeScriptによるフロントエンドWebアプリ
+  - `WEB_TUTORIAL.md`: web/ のコードを教材にした Web アプリ開発入門 (動く場所と通信・設計の選び方・React・Canvas・入力・AI 推論・テスト・公開)
   - `src/game/`: ゲームエンジン (learn と同じルール)
   - `src/ai/`: モデル JSON の読み込み・推論と、AI の入力の作成 (外部ライブラリ不要)
   - `src/components/`: 画面
