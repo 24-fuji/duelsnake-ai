@@ -34,8 +34,7 @@ h1 {
 }
 
 select,
-button,
-input[type="file"] {
+button {
   font: inherit;
 }
 
@@ -198,6 +197,68 @@ input[type="file"] {
   font-size: 16px;
 }
 
+/* --- ルール画面 --- */
+
+.rules-page {
+  max-width: 760px;
+  margin: 0 auto;
+  line-height: 1.7;
+}
+
+.rules-top {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.rules-top h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.rules-note {
+  color: #9aa5b1;
+  font-size: 14px;
+}
+
+.rules-page h3 {
+  margin: 28px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #2c333c;
+  font-size: 18px;
+}
+
+.rules-page h4 {
+  margin: 16px 0 4px;
+  font-size: 15px;
+}
+
+.rules-page ul {
+  padding-left: 1.4em;
+}
+
+.rules-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.rules-table th,
+.rules-table td {
+  padding: 6px 8px;
+  border: 1px solid #2c333c;
+  text-align: left;
+  vertical-align: top;
+}
+
+.rules-table th {
+  background: #1b2027;
+}
+
+.rules-bottom {
+  margin: 32px 0 16px;
+}
+
 /* --- 携帯版 --- */
 
 .app.mobile {
@@ -212,11 +273,6 @@ input[type="file"] {
 .app.mobile .settings {
   gap: 8px 14px;
   font-size: 14px;
-}
-
-/* 狭い画面では、ファイルの選択欄を文字の下に回す */
-.app.mobile .settings .file {
-  flex-wrap: wrap;
 }
 
 .game.mobile {

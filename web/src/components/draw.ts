@@ -25,7 +25,8 @@ export const PLAYER_PALETTES: readonly [Palette, Palette] = [
 const BACKGROUND = "#1b1f24";
 const GRID_LINE = "#262b33";
 
-type Sprite = ItemType | "obstacle";
+/** 画像のある盤面の要素。アイテムとお邪魔ブロック */
+export type Sprite = ItemType | "obstacle";
 
 /** 画像はどれも余白を削った正方形 */
 const SPRITE_URLS: Record<Sprite, string> = {
@@ -37,7 +38,7 @@ const SPRITE_URLS: Record<Sprite, string> = {
   obstacle: obstacleUrl,
 };
 
-export function itemImageUrl(kind: ItemType): string {
+export function itemImageUrl(kind: Sprite): string {
   return SPRITE_URLS[kind];
 }
 

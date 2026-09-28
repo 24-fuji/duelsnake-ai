@@ -39,9 +39,11 @@ interface Props {
   /** 試合が終わったら自動で次の試合を始める (AI 同士のみ) */
   autoRestart: boolean;
   layout: Layout;
+  /** false の間 (ルール画面を開いている間) は止めておき、キー入力も受け付けない */
+  active: boolean;
 }
 
-export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, layout }: Props) {
+export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, layout, active }: Props) {
   const rules = useMemo(() => rulesFromConfig(model.info.game), [model]);
   const ais = useMemo(
     () =>
@@ -66,6 +68,12 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+    if (!active && statusRef.current === "running") setStatus("paused");
+  }, [active]);
 
   const start = useCallback(() => {
     if (envRef.current?.isOver) {
@@ -129,13 +137,14 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
   }, [status, speed, rules, tick]);
 
   useEffect(() => {
-    if (status !== "over" || !autoRestart || mode !== "ai_vs_ai") return;
+    if (!active || status !== "over" || !autoRestart || mode !== "ai_vs_ai") return;
     const timer = setTimeout(start, AUTO_RESTART_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [status, autoRestart, mode, start]);
+  }, [active, status, autoRestart, mode, start]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!activeRef.current) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
       const current = statusRef.current;
       if (e.code === "Enter") {

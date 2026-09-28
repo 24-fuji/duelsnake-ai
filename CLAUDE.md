@@ -30,4 +30,5 @@ ci: Pages の配信元が GitHub Actions でなければデプロイ前に止め
 
 - 構成とコマンドは [README.md](README.md) を参照する。
 - ゲームルールは [learn/RULES.md](learn/RULES.md) が正。ルールを変えるときは、学習側 (`learn/src/env/`) と Web 側 (`web/src/game/`) を同じように直し、両方のテスト (`just test` と `just web-test`) を通す。
+  Web のルール画面 (`web/src/components/RulesScreen.tsx`) の説明も合わせて直す。
 - AI の入力 (観測) の仕様を変えたら、`learn/src/env/observation.rs` と `web/src/ai/observation.ts` を揃え、モデルを学習し直す。

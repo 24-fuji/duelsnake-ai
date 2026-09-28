@@ -50,10 +50,12 @@ interface Props {
   /** 制限時間 (秒)。0 なら制限なし */
   timeLimitSeconds: number;
   layout: Layout;
+  /** false の間 (ルール画面を開いている間) は止めておき、キー入力も受け付けない */
+  active: boolean;
 }
 
 /** 一人モードの画面。AI の相手はおらず、自分の盤面だけで遊ぶ */
-export function SoloScreen({ game, timeLimitSeconds, layout }: Props) {
+export function SoloScreen({ game, timeLimitSeconds, layout, active }: Props) {
   const rules = useMemo(() => rulesFromConfig(game), [game]);
 
   const envRef = useRef<SoloEnv | null>(null);
@@ -68,6 +70,12 @@ export function SoloScreen({ game, timeLimitSeconds, layout }: Props) {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  const activeRef = useRef(active);
+  useEffect(() => {
+    activeRef.current = active;
+    if (!active && statusRef.current === "running") setStatus("paused");
+  }, [active]);
 
   const start = useCallback(() => {
     if (envRef.current?.isOver) envRef.current = new SoloEnv(rules, timeLimitSeconds);
@@ -110,6 +118,7 @@ export function SoloScreen({ game, timeLimitSeconds, layout }: Props) {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!activeRef.current) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
       const current = statusRef.current;
       if (e.code === "Enter") {
