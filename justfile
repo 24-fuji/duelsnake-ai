@@ -20,6 +20,10 @@ train-resume *ARGS:
 train-watch:
     tail -n 20 -f "$(ls -t log/train-*.log | head -n 1)"
 
+# log/ の中身を消す (ディレクトリ確保用の .gitkeep は残す)
+log-clean:
+    find log -mindepth 1 ! -name .gitkeep -delete
+
 # 動作確認用の短い学習。model/ は上書きせず /tmp/duelsnake-smoke に出力する
 train-smoke:
     cd learn && cargo run --release -- --games 1000 --envs 16 --out-dir /tmp/duelsnake-smoke
