@@ -33,6 +33,10 @@ field-reset WIDTH HEIGHT:
     sed -i -E "s/^( *width:) *[0-9]+/\1 $w/; s/^( *height:) *[0-9]+/\1 $h/" learn/config.yaml
     grep -n -E "^ *(width|height):" learn/config.yaml
 
+# config.yaml の盤面サイズ (width と height) を表示する
+field-check:
+    grep -n -E "^ *(width|height):" learn/config.yaml
+
 test:
     cd learn && cargo test --release
 
