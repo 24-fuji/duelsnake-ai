@@ -24,6 +24,15 @@ train-watch:
 train-smoke:
     cd learn && cargo run --release -- --games 1000 --envs 16 --out-dir /tmp/duelsnake-smoke
 
+# config.yaml の盤面サイズを変える。例: `just field-reset 14 16` (幅 14、高さ 16)。先頭の `-` は無視する
+field-reset WIDTH HEIGHT:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    w="{{WIDTH}}"; h="{{HEIGHT}}"; w="${w#-}"; h="${h#-}"
+    [[ "$w" =~ ^[0-9]+$ && "$h" =~ ^[0-9]+$ ]] || { echo "幅と高さは整数で指定してください" >&2; exit 1; }
+    sed -i -E "s/^( *width:) *[0-9]+/\1 $w/; s/^( *height:) *[0-9]+/\1 $h/" learn/config.yaml
+    grep -n -E "^ *(width|height):" learn/config.yaml
+
 test:
     cd learn && cargo test --release
 
