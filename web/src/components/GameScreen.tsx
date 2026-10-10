@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AiPlayer, type Decision } from "../ai/agent";
 import type { SnakeModel } from "../ai/model";
+import { CHEAT_WIN_SCORES, useCheatCodes } from "../cheats";
 import { GameEnv, type Action } from "../game/game";
 import { rulesFromConfig } from "../game/rules";
 import { Board } from "./Board";
@@ -185,6 +186,19 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
     [start, ais],
   );
   const gestures = useGestures(onGesture);
+
+  // チートコード `win force`: 人間が時間切れのスコア判定で AI に勝った結果にする
+  const forceWin = useCallback(() => {
+    const env = envRef.current!;
+    if (statusRef.current === "over") return;
+    env.fields.forEach((field, p) => (field.snake.score = CHEAT_WIN_SCORES[p]));
+    env.tick = rules.timeLimitTicks;
+    env.result = { winner: 0, reason: "time_up" };
+    setTally((t) => ({ ...t, wins: [t.wins[0] + 1, t.wins[1]] }));
+    setStatus("over");
+    setVersion((v) => v + 1);
+  }, [rules]);
+  useCheatCodes({ forceWin: mode === "human_vs_ai" ? forceWin : undefined }, active);
 
   const env = envRef.current;
   const remaining = (env.remainingTicks * rules.tickSeconds).toFixed(1);
