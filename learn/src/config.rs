@@ -79,8 +79,32 @@ pub struct RewardConfig {
     pub win: f32,
     pub lose: f32,
     pub draw: f32,
+    pub death_penalty: DeathPenaltyConfig,
     pub pickup: PickupRewardConfig,
     pub force: ForceConfig,
+}
+
+/// 衝突して死んだときの追加の罰。それまでにアイテムで稼いだ報酬に比例して重くする。
+/// 勝ち負けの報酬 (lose) が一定だと、たくさん稼いだあとなら死んでも収支がプラスになり、盤面が埋まる終盤に無理をして死ぬ動きが出る
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeathPenaltyConfig {
+    /// 死んだ試合でアイテムから得た報酬の合計のうち、この割合を罰として引く。1 なら稼ぎをすべて打ち消す
+    pub score_ratio: f32,
+    /// 割合を 0 からここまで上げていく判断回数。序盤は稼ぎが罰で消えて学習が進まなくなるのを避ける。0 なら最初から全力
+    pub ramp_decisions: u64,
+}
+
+impl DeathPenaltyConfig {
+    /// 死んだときに報酬へ足す値 (0 以下)。`earned` はその試合でアイテムから得た報酬の合計、`decisions` は通算の判断回数
+    pub fn penalty(&self, earned: f32, decisions: u64) -> f32 {
+        let ramp = if self.ramp_decisions == 0 {
+            1.0
+        } else {
+            (decisions as f32 / self.ramp_decisions as f32).min(1.0)
+        };
+        -self.score_ratio * ramp * earned.max(0.0)
+    }
 }
 
 /// アイテムを取ったときの報酬
@@ -209,6 +233,10 @@ impl Config {
             .all(|&s| s >= 0.0),
             "reward.force の強さは 0 以上にしてください",
         )?;
+        check(
+            self.reward.death_penalty.score_ratio >= 0.0,
+            "reward.death_penalty.score_ratio は 0 以上にしてください",
+        )?;
         check(train.num_envs >= 1, "num_envs は 1 以上にしてください")?;
         check(train.n_step >= 1, "n_step は 1 以上にしてください")?;
         check(
@@ -227,5 +255,32 @@ impl Config {
             "log_interval_seconds・save_interval_games・commit_interval_games は 1 以上にしてください",
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod death_penalty_tests {
+    use super::DeathPenaltyConfig;
+
+    fn cfg(score_ratio: f32, ramp_decisions: u64) -> DeathPenaltyConfig {
+        DeathPenaltyConfig {
+            score_ratio,
+            ramp_decisions,
+        }
+    }
+
+    #[test]
+    fn penalty_grows_with_earnings_and_ramps_up() {
+        let c = cfg(0.5, 100);
+        assert_eq!(c.penalty(40.0, 0), 0.0);
+        assert_eq!(c.penalty(40.0, 50), -10.0);
+        assert_eq!(c.penalty(40.0, 100), -20.0);
+        assert_eq!(c.penalty(40.0, 10_000), -20.0);
+    }
+
+    #[test]
+    fn no_penalty_without_earnings_and_no_ramp_when_zero() {
+        assert_eq!(cfg(1.0, 0).penalty(-8.0, 0), 0.0);
+        assert_eq!(cfg(1.0, 0).penalty(8.0, 0), -8.0);
     }
 }

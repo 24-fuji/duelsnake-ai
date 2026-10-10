@@ -43,6 +43,8 @@ struct Stream {
     reward: f32,
     /// この試合で引力・斥力から得た報酬の合計
     force_reward: f32,
+    /// この試合でアイテムを取って得た報酬の合計。死んだときの罰の大きさに使う
+    pickup_reward: f32,
     nstep: NStepBuilder,
 }
 
@@ -57,6 +59,7 @@ impl Slot {
             last: None,
             reward: 0.0,
             force_reward: 0.0,
+            pickup_reward: 0.0,
             nstep: NStepBuilder::new(n_step, gamma),
         };
         Self {
@@ -397,7 +400,9 @@ impl Trainer {
             for (p, stream) in slot.streams.iter_mut().enumerate() {
                 let field = &slot.env.fields[p];
                 if let Some(kind) = field.eaten {
-                    stream.reward += reward_cfg.pickup.reward(kind);
+                    let pickup = reward_cfg.pickup.reward(kind);
+                    stream.reward += pickup;
+                    stream.pickup_reward += pickup;
                 }
                 if let Some(before) = &before {
                     let (head, items, obstacles) = &before[p];
@@ -416,6 +421,11 @@ impl Trainer {
                     Some(_) => reward_cfg.lose,
                     None => reward_cfg.draw,
                 };
+                if !slot.env.fields[p].snake.alive {
+                    stream.reward += reward_cfg
+                        .death_penalty
+                        .penalty(stream.pickup_reward, self.info.decisions);
+                }
                 if let Some((obs, action)) = stream.last.take() {
                     self.since_update +=
                         stream
