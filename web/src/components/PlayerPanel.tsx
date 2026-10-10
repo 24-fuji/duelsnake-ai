@@ -70,6 +70,16 @@ export function PlayerPanel({ title, field, rules, palette, decision, actions, h
 }
 
 function QValues({ decision, actions }: { decision: Decision | null; actions: readonly Action[] }) {
+  return (
+    <details className="qvalues-toggle">
+      {/* フォーカスが残ると、Enter やスペースで開閉してしまいゲームに渡せないので外す */}
+      <summary onClick={(e) => e.currentTarget.blur()}>AI の評価値</summary>
+      <QValueTable decision={decision} actions={actions} />
+    </details>
+  );
+}
+
+function QValueTable({ decision, actions }: { decision: Decision | null; actions: readonly Action[] }) {
   if (!decision) {
     return <p className="qvalues-empty">AI の判断はまだありません</p>;
   }

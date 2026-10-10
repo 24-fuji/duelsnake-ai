@@ -19,6 +19,51 @@ const DIFFICULTY_LABELS: Record<string, string> = { easy: "かんたん", medium
 const SPEEDS = [1, 2, 4];
 /** 対戦のモードと、AI のいない一人モード */
 type PlayMode = Mode | "solo";
+
+function Segmented<T extends string | number>({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="mode-field">
+      {label}
+      <div className="segmented" role="radiogroup" aria-label={label}>
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={value === o.value}
+            className={value === o.value ? "selected" : ""}
+            disabled={disabled}
+            onClick={(e) => {
+              onChange(o.value);
+              // フォーカスが残ると、Enter やスペースをゲームに渡せないので外す
+              e.currentTarget.blur();
+            }}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const MODE_OPTIONS: { value: PlayMode; label: string }[] = [
+  { value: "human_vs_ai", label: "あなた vs AI" },
+  { value: "ai_vs_ai", label: "AI vs AI (観戦)" },
+  { value: "solo", label: "一人モード" },
+];
 /** 表示の切り替えを覚えておく localStorage のキー */
 const LAYOUT_KEY = "duelsnake.layout";
 /** ルール画面を開いたときに積む履歴の印 (history.state に入れる) */
@@ -149,24 +194,13 @@ export function App() {
         <header>
           <h1>DuelSnake AI</h1>
           <div className="settings">
-            <label>
-              盤面
-              <select value={board ?? ""} onChange={(e) => setBoard(e.target.value)}>
-                {BUNDLED_MODELS.map((m) => (
-                  <option key={m.key} value={m.key}>
-                    {m.width} × {m.height}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              モード
-              <select value={mode} onChange={(e) => setMode(e.target.value as PlayMode)}>
-                <option value="human_vs_ai">あなた vs AI</option>
-                <option value="ai_vs_ai">AI vs AI (観戦)</option>
-                <option value="solo">一人モード</option>
-              </select>
-            </label>
+            <Segmented
+              label="盤面"
+              value={board ?? ""}
+              onChange={setBoard}
+              options={BUNDLED_MODELS.map((m) => ({ value: m.key, label: `${m.width} × ${m.height}` }))}
+            />
+            <Segmented label="モード" value={mode} onChange={setMode} options={MODE_OPTIONS} />
             {solo && (
               <label>
                 制限時間
@@ -189,30 +223,23 @@ export function App() {
                 <span className="time-limit-value">{formatTimeLimit(soloTimeLimit)}</span>
               </label>
             )}
-            <label>
-              難易度
-              <select value={difficulty} disabled={solo} onChange={(e) => setDifficulty(e.target.value)}>
-                {difficulties.map((d) => (
-                  <option key={d.name} value={d.name}>
-                    {DIFFICULTY_LABELS[d.name] ?? d.name} (ランダム {Math.round(d.random_action_rate * 100)}%)
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              速度
-              <select
-                value={mode === "ai_vs_ai" ? speed : 1}
-                disabled={mode !== "ai_vs_ai"}
-                onChange={(e) => setSpeed(Number(e.target.value))}
-              >
-                {SPEEDS.map((s) => (
-                  <option key={s} value={s}>
-                    x{s}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <Segmented
+              label="難易度"
+              value={difficulty}
+              disabled={solo}
+              onChange={setDifficulty}
+              options={difficulties.map((d) => ({
+                value: d.name,
+                label: `${DIFFICULTY_LABELS[d.name] ?? d.name} (ランダム ${Math.round(d.random_action_rate * 100)}%)`,
+              }))}
+            />
+            <Segmented
+              label="速度"
+              value={mode === "ai_vs_ai" ? speed : 1}
+              disabled={mode !== "ai_vs_ai"}
+              onChange={setSpeed}
+              options={SPEEDS.map((v) => ({ value: v, label: `x${v}` }))}
+            />
             <label>
               <input
                 type="checkbox"
@@ -222,18 +249,21 @@ export function App() {
               />
               自動で次の試合
             </label>
-            <label>
-              表示
-              <select value={layout} onChange={(e) => changeLayout(e.target.value as Layout)}>
-                <option value="pc">パソコン版</option>
-                <option value="mobile">携帯版 (タッチ操作)</option>
-              </select>
-            </label>
+            <Segmented
+              label="表示"
+              value={layout}
+              onChange={changeLayout}
+              options={[
+                { value: "pc", label: "パソコン版" },
+                { value: "mobile", label: "携帯版 (タッチ操作)" },
+              ]}
+            />
           </div>
           {info && <p className="model-info">最終更新: {new Date(info.created_at).toLocaleString()}</p>}
           {error && <p className="error">{error}</p>}
         </header>
 
+        <div className="main">
         {!current ? (
           !error && <p>モデルを読み込み中...</p>
         ) : mode === "solo" ? (
@@ -301,6 +331,7 @@ export function App() {
             </button>
           </p>
         </section>
+        </div>
       </div>
     </div>
   );
