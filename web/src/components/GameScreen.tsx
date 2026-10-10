@@ -4,6 +4,7 @@ import type { SnakeModel } from "../ai/model";
 import { GameEnv, type Action } from "../game/game";
 import { rulesFromConfig } from "../game/rules";
 import { Board } from "./Board";
+import { Confetti } from "./Confetti";
 import { PLAYER_PALETTES } from "./draw";
 import { useGestures, type Gesture } from "./gestures";
 import { PlayerPanel } from "./PlayerPanel";
@@ -41,9 +42,11 @@ interface Props {
   layout: Layout;
   /** false の間 (ルール画面を開いている間) は止めておき、キー入力も受け付けない */
   active: boolean;
+  /** 人間が時間切れのスコア判定で AI に勝ったとき、紙吹雪を出すか (難易度が高いときだけ出す) */
+  confettiOnWin?: boolean;
 }
 
-export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, layout, active }: Props) {
+export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, layout, active, confettiOnWin = false }: Props) {
   const rules = useMemo(() => rulesFromConfig(model.info.game), [model]);
   const ais = useMemo(
     () =>
@@ -206,12 +209,33 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
     />
   );
   const scoreBar = <ScoreBar scores={[env.fields[0].snake.score, env.fields[1].snake.score]} names={names} />;
+  const touch = layout === "mobile";
+  const result = status === "over" ? env.result : null;
+  const verdict = result ? verdictView(env, names, mode) : null;
   const overlay = status !== "running" && (
     <div className="overlay">
-      <p>{overlayMessage(status, env, names, layout)}</p>
-      {layout === "mobile" && status === "over" && <p className="hint">タップでもう一度</p>}
+      {verdict ? (
+        <>
+          <p className="result-title" style={{ color: verdict.color }}>
+            {verdict.title}
+          </p>
+          <p>{verdict.detail}</p>
+        </>
+      ) : (
+        <p>
+          {status === "ready"
+            ? touch
+              ? "タップで開始"
+              : "Enter キーで開始"
+            : touch
+              ? "一時停止中 (タップで再開)"
+              : "一時停止中 (P で再開)"}
+        </p>
+      )}
+      {touch && status === "over" && <p className="hint">タップでもう一度</p>}
     </div>
   );
+  const celebrate = confettiOnWin && mode === "human_vs_ai" && result?.winner === 0 && result.reason === "time_up";
 
   if (layout === "mobile") {
     const watching = mode === "ai_vs_ai";
@@ -219,6 +243,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
     const sub = 1 - main;
     return (
       <div className="game mobile">
+        {celebrate && <Confetti />}
         <div className="mobile-top">
           <div className="mobile-status">
             {scoreBar}
@@ -253,6 +278,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
 
   return (
     <div className="game">
+      {celebrate && <Confetti />}
       {scoreBar}
       <div className="topbar">
         <span className="timer">残り {remaining} 秒</span>
@@ -288,13 +314,26 @@ function ScoreBar({ scores, names }: { scores: number[]; names: string[] }) {
   );
 }
 
-function overlayMessage(status: Status, env: GameEnv, names: string[], layout: Layout): string {
-  const touch = layout === "mobile";
-  if (status === "ready") return touch ? "タップで開始" : "Enter キーで開始";
-  if (status === "paused") return touch ? "一時停止中 (タップで再開)" : "一時停止中 (P で再開)";
-  const result = env.result;
-  if (!result) return "";
-  const outcome = result.winner === null ? "引き分け" : `${names[result.winner]}の勝ち`;
+const WIN_COLOR = "#fdd835";
+const LOSE_COLOR = "#ef5350";
+const DRAW_COLOR = "#cfd8dc";
+
+/** 試合結果の見出しと、最終スコア・決着の理由 */
+function verdictView(env: GameEnv, names: string[], mode: Mode): { title: string; color: string; detail: string } {
+  const result = env.result!;
+  let title: string;
+  let color: string;
+  if (result.winner === null) {
+    title = "DRAW";
+    color = DRAW_COLOR;
+  } else if (mode === "human_vs_ai") {
+    const won = result.winner === 0;
+    title = won ? "You WIN" : "You LOSE";
+    color = won ? WIN_COLOR : LOSE_COLOR;
+  } else {
+    title = `WINNER ${names[result.winner]}`;
+    color = PLAYER_PALETTES[result.winner].head;
+  }
   let reason: string;
   if (result.reason === "time_up") {
     reason = "時間切れ・スコア判定";
@@ -307,5 +346,6 @@ function overlayMessage(status: Status, env: GameEnv, names: string[], layout: L
   } else {
     reason = `${names[1 - result.winner!]}が衝突`;
   }
-  return `${outcome} (${reason})`;
+  const [a, b] = env.fields.map((f) => f.snake.score);
+  return { title, color, detail: `最終スコア ${names[0]} ${a} : ${b} ${names[1]} (${reason})` };
 }

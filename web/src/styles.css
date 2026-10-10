@@ -413,6 +413,21 @@ button {
   height: auto;
 }
 
+/* 試合結果の見出し。色は結果に合わせて文字側で指定する */
+.overlay .result-title {
+  margin: 0;
+  font-size: 56px;
+  letter-spacing: 0.06em;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+}
+
+.confetti {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
 .overlay .hint {
   margin: 0;
   font-size: 16px;

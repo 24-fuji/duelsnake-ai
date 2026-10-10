@@ -98,7 +98,8 @@ function loaded(model: SnakeModel): LoadedModel {
 }
 
 export function App() {
-  const [current, setCurrent] = useState<LoadedModel | null>(null);
+  /** 同梱モデルすべて (キーは盤面)。ページを開いた時点で全部読み込み、以後は通信しない */
+  const [models, setModels] = useState<Record<string, LoadedModel> | null>(null);
   /** 選んでいる同梱モデルの盤面 ("16x16" など)。同梱モデルが無ければ null */
   const [board, setBoard] = useState<string | null>(
     () => (BUNDLED_MODELS.find((m) => m.key === DEFAULT_BOARD) ?? BUNDLED_MODELS[0])?.key ?? null,
@@ -164,24 +165,29 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const entry = BUNDLED_MODELS.find((m) => m.key === board);
-    if (!entry) return;
-    // 読み込み中に別の盤面を選んだら、古いほうの結果は捨てる
     let cancelled = false;
-    SnakeModel.load(entry.url)
-      .then((model) => {
-        if (cancelled) return;
-        setCurrent(loaded(model));
-        setError(null);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(`${entry.path} を読み込めません: ${String(e)}`);
+    Promise.allSettled(BUNDLED_MODELS.map((m) => SnakeModel.load(m.url))).then((results) => {
+      if (cancelled) return;
+      const next: Record<string, LoadedModel> = {};
+      const errors: string[] = [];
+      results.forEach((r, i) => {
+        const entry = BUNDLED_MODELS[i];
+        try {
+          if (r.status === "rejected") throw r.reason;
+          next[entry.key] = loaded(r.value);
+        } catch (e) {
+          errors.push(`${entry.path} を読み込めません: ${String(e)}`);
+        }
       });
+      setModels(next);
+      setError(errors.length > 0 ? errors.join("\n") : null);
+    });
     return () => {
       cancelled = true;
     };
-  }, [board]);
+  }, []);
 
+  const current = board && models ? (models[board] ?? null) : null;
   const info = current?.model.info;
   const difficulties = info?.difficulty ?? [];
   const randomActionRate = current?.model.randomActionRate(difficulty) ?? 0;
@@ -281,6 +287,7 @@ export function App() {
             autoRestart={autoRestart}
             layout={layout}
             active={!showRules}
+            confettiOnWin={difficulty === "hard"}
           />
         )}
 
