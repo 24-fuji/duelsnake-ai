@@ -176,12 +176,25 @@ button {
   font-weight: bold;
 }
 
-.qvalues-toggle {
-  margin-top: 8px;
+.score-bar {
+  height: 10px;
+  margin: 0 0 6px;
+  border-radius: 5px;
+  background: #263238;
+  overflow: hidden;
+}
+
+.score-bar-fill {
+  height: 100%;
+  transition: width 0.2s, background-color 0.2s;
+}
+
+.panel-details {
   font-size: 14px;
 }
 
-.qvalues-toggle summary {
+.panel-details summary {
+  margin-bottom: 6px;
   cursor: pointer;
   color: #9aa5b1;
 }
@@ -246,6 +259,15 @@ button {
 .app:not(.mobile) .main > .help {
   flex: 1 1 260px;
   margin-top: 12px;
+}
+
+.items {
+  padding: 0;
+  list-style: none;
+}
+
+.items .item-icon {
+  margin-left: 0;
 }
 
 .help h2 {

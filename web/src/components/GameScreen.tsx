@@ -52,7 +52,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
         : [new AiPlayer(model, randomActionRate), new AiPlayer(model, randomActionRate)],
     [model, mode, randomActionRate],
   );
-  const names = mode === "human_vs_ai" ? ["あなた", "AI"] : ["AI 1", "AI 2"];
+  const names = mode === "human_vs_ai" ? ["You", "AI"] : ["AI 1", "AI 2"];
 
   const envRef = useRef<GameEnv | null>(null);
   if (envRef.current === null) envRef.current = new GameEnv(rules);
@@ -203,6 +203,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
       palette={PLAYER_PALETTES[player]}
       decision={ais[player] ? decisionsRef.current[player] : undefined}
       actions={model.info.actions}
+      scoreBar
     />
   );
   const overlay = status !== "running" && (

@@ -15,6 +15,15 @@ export const ACTION_LABELS: Record<Action, string> = {
 
 const HELD_LABELS = { block_clear: "ブロック消去", block_jam: "お邪魔" } as const;
 
+/** スコアバーが満タンになるスコア。これ以上は満タンのまま */
+export const SCORE_BAR_MAX = 30;
+
+/** スコアに応じて赤 (0) から緑 (SCORE_BAR_MAX) へ線形に変わる色 */
+export function scoreBarColor(score: number): string {
+  const ratio = Math.min(1, Math.max(0, score / SCORE_BAR_MAX));
+  return `hsl(${120 * ratio}, 70%, 45%)`;
+}
+
 interface Props {
   title: string;
   field: Field;
@@ -25,9 +34,11 @@ interface Props {
   actions?: readonly Action[];
   /** 所持アイテムと飛来中のお邪魔の欄を出すか。所持アイテムが出ない一人モードでは出さない */
   heldItems?: boolean;
+  /** スコアに応じて色の変わるバーを出すか。対戦モードで出す */
+  scoreBar?: boolean;
 }
 
-export function PlayerPanel({ title, field, rules, palette, decision, actions, heldItems = true }: Props) {
+export function PlayerPanel({ title, field, rules, palette, decision, actions, heldItems = true, scoreBar = false }: Props) {
   const snake = field.snake;
   const seconds = (ticks: number) => (ticks * rules.tickSeconds).toFixed(1);
   const boost =
@@ -44,6 +55,20 @@ export function PlayerPanel({ title, field, rules, palette, decision, actions, h
         {title}
         {!snake.alive && <span className="dead">衝突</span>}
       </h2>
+      {scoreBar && (
+        <div className="score-bar" title={`スコア ${snake.score}`}>
+          <div
+            className="score-bar-fill"
+            style={{
+              width: `${Math.min(100, (100 * snake.score) / SCORE_BAR_MAX)}%`,
+              background: scoreBarColor(snake.score),
+            }}
+          />
+        </div>
+      )}
+      <details className="panel-details">
+        {/* フォーカスが残ると、Enter やスペースで開閉してしまいゲームに渡せないので外す */}
+        <summary onClick={(e) => e.currentTarget.blur()}>{decision !== undefined ? "詳細 (スコア・AI の評価値)" : "詳細 (スコア)"}</summary>
       <dl>
         <dt>スコア</dt>
         <dd className="score">{snake.score}</dd>
@@ -64,18 +89,9 @@ export function PlayerPanel({ title, field, rules, palette, decision, actions, h
           </>
         )}
       </dl>
-      {decision !== undefined && actions && <QValues decision={decision} actions={actions} />}
+      {decision !== undefined && actions && <QValueTable decision={decision} actions={actions} />}
+      </details>
     </div>
-  );
-}
-
-function QValues({ decision, actions }: { decision: Decision | null; actions: readonly Action[] }) {
-  return (
-    <details className="qvalues-toggle">
-      {/* フォーカスが残ると、Enter やスペースで開閉してしまいゲームに渡せないので外す */}
-      <summary onClick={(e) => e.currentTarget.blur()}>AI の評価値</summary>
-      <QValueTable decision={decision} actions={actions} />
-    </details>
   );
 }
 

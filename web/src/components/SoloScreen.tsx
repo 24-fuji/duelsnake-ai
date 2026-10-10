@@ -172,7 +172,7 @@ export function SoloScreen({ game, timeLimitSeconds, layout, active }: Props) {
     />
   );
   const panel = (
-    <PlayerPanel title="あなた" field={env.field} rules={env.rules} palette={PLAYER_PALETTES[0]} heldItems={false} />
+    <PlayerPanel title="You" field={env.field} rules={env.rules} palette={PLAYER_PALETTES[0]} heldItems={false} />
   );
   const resultWord = status === "over" && env.result ? RESULT_WORDS[env.result] : undefined;
   const overlay = status !== "running" && (

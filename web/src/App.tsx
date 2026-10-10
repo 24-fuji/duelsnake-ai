@@ -60,9 +60,9 @@ function Segmented<T extends string | number>({
 }
 
 const MODE_OPTIONS: { value: PlayMode; label: string }[] = [
-  { value: "human_vs_ai", label: "あなた vs AI" },
-  { value: "ai_vs_ai", label: "AI vs AI (観戦)" },
-  { value: "solo", label: "一人モード" },
+  { value: "human_vs_ai", label: "vs AI" },
+  { value: "ai_vs_ai", label: "観戦" },
+  { value: "solo", label: "ソロ" },
 ];
 /** 表示の切り替えを覚えておく localStorage のキー */
 const LAYOUT_KEY = "duelsnake.layout";
@@ -228,10 +228,7 @@ export function App() {
               value={difficulty}
               disabled={solo}
               onChange={setDifficulty}
-              options={difficulties.map((d) => ({
-                value: d.name,
-                label: `${DIFFICULTY_LABELS[d.name] ?? d.name} (ランダム ${Math.round(d.random_action_rate * 100)}%)`,
-              }))}
+              options={difficulties.map((d) => ({ value: d.name, label: DIFFICULTY_LABELS[d.name] ?? d.name }))}
             />
             <Segmented
               label="速度"
@@ -305,20 +302,32 @@ export function App() {
               <li>開始・もう一度: Enter、一時停止: P / Esc</li>
             </ul>
           )}
-          <p>
-            アイテム: <img className="item-icon" src={itemImageUrl("normal_apple")} alt="" />
-            リンゴ (+1) <img className="item-icon" src={itemImageUrl("gold_apple")} alt="" />
-            金のリンゴ (+3) <img className="item-icon" src={itemImageUrl("poison_apple")} alt="" />
-            {solo ? (
-              <>毒リンゴ (-1, {-SOLO_POISON_GROW} マス縮む)</>
-            ) : (
+          <ul className="items">
+            <li>
+              <img className="item-icon" src={itemImageUrl("normal_apple")} alt="" />
+              リンゴ (+1)
+            </li>
+            <li>
+              <img className="item-icon" src={itemImageUrl("gold_apple")} alt="" />
+              金のリンゴ (+3)
+            </li>
+            <li>
+              <img className="item-icon" src={itemImageUrl("poison_apple")} alt="" />
+              {solo ? `毒リンゴ (-1, ${-SOLO_POISON_GROW} マス縮む)` : "毒リンゴ (-1, 縮む)"}
+            </li>
+            {!solo && (
               <>
-                毒リンゴ (-1, 縮む) <img className="item-icon" src={itemImageUrl("block_clear")} alt="" />
-                ブロック消去 <img className="item-icon" src={itemImageUrl("block_jam")} alt="" />
-                お邪魔 (相手にブロックを送る)
+                <li>
+                  <img className="item-icon" src={itemImageUrl("block_clear")} alt="" />
+                  ブロック消去
+                </li>
+                <li>
+                  <img className="item-icon" src={itemImageUrl("block_jam")} alt="" />
+                  お邪魔 (相手にブロックを送る)
+                </li>
               </>
             )}
-          </p>
+          </ul>
           {solo && (
             <p>
               一人モード: ブロック消去とお邪魔は出ず、毒リンゴが対戦の {SOLO_POISON_MULTIPLIER} 倍出ます。
