@@ -197,7 +197,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
     env.fields.forEach((field, p) => (field.snake.score = CHEAT_WIN_SCORES[p]));
     env.tick = rules.timeLimitTicks;
     env.result = { winner: 0, reason: "time_up" };
-    setTally((t) => ({ ...t, wins: [t.wins[0] + 1, t.wins[1]] }));
+    // 勝敗の記録 (tally) には数えない
     setCheated(true);
     setStatus("over");
     setVersion((v) => v + 1);
