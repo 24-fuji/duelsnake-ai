@@ -65,6 +65,8 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
   const [status, setStatus] = useState<Status>("ready");
   const statusRef = useRef(status);
   const [version, setVersion] = useState(0);
+  /** この結果がチートコードで作ったものか。結果の見出しに小さく印を付ける */
+  const [cheated, setCheated] = useState(false);
   const [tally, setTally] = useState({ wins: [0, 0], draws: 0 });
   /** 携帯版の AI 同士で大きく映すプレイヤー。もう一方はワイプに映す */
   const [focus, setFocus] = useState(0);
@@ -85,6 +87,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
       decisionsRef.current = [null, null];
     }
     inputsRef.current = [];
+    setCheated(false);
     // 設定欄などにフォーカスが残っていると矢印キーやスペースを奪われるので外す
     (document.activeElement as HTMLElement | null)?.blur?.();
     setStatus("running");
@@ -195,6 +198,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
     env.tick = rules.timeLimitTicks;
     env.result = { winner: 0, reason: "time_up" };
     setTally((t) => ({ ...t, wins: [t.wins[0] + 1, t.wins[1]] }));
+    setCheated(true);
     setStatus("over");
     setVersion((v) => v + 1);
   }, [rules]);
@@ -237,6 +241,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
                 {line}
               </span>
             ))}
+            {cheated && <small className="cheat-mark"> c</small>}
           </p>
           <p>{verdict.detail}</p>
         </>
