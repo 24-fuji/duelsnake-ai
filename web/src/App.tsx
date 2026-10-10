@@ -306,7 +306,8 @@ export function App() {
               <li>移動: 矢印キー / WASD</li>
               <li>ブースト: スペース</li>
               {!solo && <li>アイテム使用: Shift / E</li>}
-              <li>開始・もう一度: Enter、一時停止: P / Esc</li>
+              <li>開始・もう一度: Enter</li>
+              <li>一時停止: P / Esc</li>
             </ul>
           )}
           <h2>アイテム</h2>
