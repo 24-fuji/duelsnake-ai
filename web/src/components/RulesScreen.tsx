@@ -36,8 +36,10 @@ export function RulesScreen({ game, onBack }: Props) {
           <li>2人対戦のスネークゲームです。それぞれ自分専用の盤面で、自分のヘビを操作します。</li>
           <li>2つの盤面は別々で、相手に影響を与えられるのは「お邪魔」アイテムだけです。</li>
           <li>制限時間は {sec(rules.timeLimitTicks)} です。</li>
-          <li>壁・自分の体・お邪魔ブロックにぶつかると、その時点で負けです。</li>
-          <li>お邪魔ブロック以外のすべてのマスを自分のヘビで埋めると、その時点で勝ちです。</li>
+          <li>壁にぶつかるとゲームオーバー (負け) です。</li>
+          <li>妨害ブロック {icon("obstacle")} にぶつかるとゲームオーバー (負け) です。</li>
+          <li>自分自身の体にぶつかるとゲームオーバー (負け) です。</li>
+          <li>妨害ブロック以外のすべてのマスを自分のヘビで埋めると、その時点で勝ちです。</li>
         </ul>
       </section>
 
@@ -149,7 +151,7 @@ export function RulesScreen({ game, onBack }: Props) {
             </tr>
             <tr>
               <td>
-                {icon("block_clear")} ブロック消去
+                {icon("block_clear")} 妨害ブロック消去
               </td>
               <td className="num">1</td>
               <td>持っておき、あとで使う</td>
@@ -176,13 +178,13 @@ export function RulesScreen({ game, onBack }: Props) {
         <ul>
           <li>持てるのは 1 つだけです。持っているときに別のものを取ると、新しいほうに入れ替わります。</li>
           <li>
-            {icon("block_clear")} ブロック消去: 使うと、自分の盤面のお邪魔ブロック {icon("obstacle")} をすべて消します。
+            {icon("block_clear")} 妨害ブロック消去: 使うと、自分の盤面の妨害ブロック {icon("obstacle")} をすべて消します。
           </li>
           <li>
-            {icon("block_jam")} お邪魔: 使うと {sec(rules.jamDelayTicks)}後に、相手の盤面の空いているマスのどこかにお邪魔ブロックを
+            {icon("block_jam")} お邪魔: 使うと {sec(rules.jamDelayTicks)}後に、相手の盤面の空いているマスのどこかに妨害ブロックを
             1 つ置きます。相手の頭から {rules.jamSafeDistance} マス以内 (縦と横のマス数の合計) には置きません。置ける場所が無ければ、ブロックは消えます。
           </li>
-          <li>お邪魔ブロックは、ブロック消去で消されるまで残ります。</li>
+          <li>妨害ブロックは、妨害ブロック消去で消されるまで残ります。</li>
         </ul>
       </section>
 
@@ -220,7 +222,7 @@ export function RulesScreen({ game, onBack }: Props) {
           </tbody>
         </table>
         <ul>
-          <li>「盤面を埋めた」とは、自分のヘビの体とお邪魔ブロックで、盤面のすべてのマスがふさがった状態です。</li>
+          <li>「盤面を埋めた」とは、自分のヘビの体と妨害ブロックで、盤面のすべてのマスがふさがった状態です。</li>
           <li>伸びている途中で最後の空きマスに入ると、尻尾が縮まないので盤面が埋まります。伸びている途中でなければ尻尾のマスが空くので、埋まりません。</li>
           <li>埋めた時点で勝ちが決まるので、そのあとぶつかって負けになることはありません。</li>
         </ul>
@@ -229,7 +231,7 @@ export function RulesScreen({ game, onBack }: Props) {
       <section>
         <h3>一人モード</h3>
         <ul>
-          <li>AI の相手がいないモードです。ブロック消去とお邪魔は出ません。</li>
+          <li>AI の相手がいないモードです。妨害ブロック消去とお邪魔は出ません。</li>
           <li>
             毒リンゴが対戦の {SOLO_POISON_MULTIPLIER} 倍 ({solo.poisonApples} 個) 出て、取ると長さが {-SOLO_POISON_GROW}{" "}
             マス縮みます。

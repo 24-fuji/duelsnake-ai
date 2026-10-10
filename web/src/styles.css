@@ -264,15 +264,6 @@ button {
   margin-top: 12px;
 }
 
-.items {
-  padding: 0;
-  list-style: none;
-}
-
-.items .item-icon {
-  margin-left: 0;
-}
-
 .help h2 {
   font-size: 16px;
 }
@@ -376,6 +367,11 @@ button {
   gap: 4px;
   min-width: 0;
   font-size: 14px;
+}
+
+/* 縦並びの中でも、バーは幅いっぱいに伸ばす */
+.mobile-status .score-bar {
+  align-self: stretch;
 }
 
 .mobile-status .timer {

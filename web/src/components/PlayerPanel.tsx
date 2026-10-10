@@ -13,7 +13,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   use_item: "アイテム使用",
 };
 
-const HELD_LABELS = { block_clear: "ブロック消去", block_jam: "お邪魔" } as const;
+const HELD_LABELS = { block_clear: "妨害ブロック消去", block_jam: "お邪魔" } as const;
 
 interface Props {
   title: string;

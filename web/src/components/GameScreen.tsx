@@ -217,7 +217,12 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
       {verdict ? (
         <>
           <p className="result-title" style={{ color: verdict.color }}>
-            {verdict.title}
+            {verdict.title.map((line, i) => (
+              <span key={i}>
+                {i > 0 && <br />}
+                {line}
+              </span>
+            ))}
           </p>
           <p>{verdict.detail}</p>
         </>
@@ -319,19 +324,19 @@ const LOSE_COLOR = "#ef5350";
 const DRAW_COLOR = "#cfd8dc";
 
 /** 試合結果の見出しと、最終スコア・決着の理由 */
-function verdictView(env: GameEnv, names: string[], mode: Mode): { title: string; color: string; detail: string } {
+function verdictView(env: GameEnv, names: string[], mode: Mode): { title: string[]; color: string; detail: string } {
   const result = env.result!;
-  let title: string;
+  let title: string[];
   let color: string;
   if (result.winner === null) {
-    title = "DRAW";
+    title = ["DRAW"];
     color = DRAW_COLOR;
   } else if (mode === "human_vs_ai") {
     const won = result.winner === 0;
-    title = won ? "You WIN" : "You LOSE";
+    title = [won ? "You WIN" : "You LOSE"];
     color = won ? WIN_COLOR : LOSE_COLOR;
   } else {
-    title = `WINNER ${names[result.winner]}`;
+    title = ["WINNER", names[result.winner]];
     color = PLAYER_PALETTES[result.winner].head;
   }
   let reason: string;

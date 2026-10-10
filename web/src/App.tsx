@@ -309,7 +309,8 @@ export function App() {
               <li>開始・もう一度: Enter、一時停止: P / Esc</li>
             </ul>
           )}
-          <ul className="items">
+          <h2>アイテム</h2>
+          <ul>
             <li>
               <img className="item-icon" src={itemImageUrl("normal_apple")} alt="" />
               リンゴ (+1)
@@ -326,18 +327,18 @@ export function App() {
               <>
                 <li>
                   <img className="item-icon" src={itemImageUrl("block_clear")} alt="" />
-                  ブロック消去
+                  妨害ブロック消去
                 </li>
                 <li>
                   <img className="item-icon" src={itemImageUrl("block_jam")} alt="" />
-                  お邪魔 (相手にブロックを送る)
+                  お邪魔 (相手に妨害ブロックを配置)
                 </li>
               </>
             )}
           </ul>
           {solo && (
             <p>
-              一人モード: ブロック消去とお邪魔は出ず、毒リンゴが対戦の {SOLO_POISON_MULTIPLIER} 倍出ます。
+              一人モード: 妨害ブロック消去とお邪魔は出ず、毒リンゴが対戦の {SOLO_POISON_MULTIPLIER} 倍出ます。
               盤面をすべて埋めるとクリアです。制限時間は「制限時間」のバーで選べます (左端は制限なし)。
             </p>
           )}
