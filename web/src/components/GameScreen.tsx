@@ -203,9 +203,9 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
       palette={PLAYER_PALETTES[player]}
       decision={ais[player] ? decisionsRef.current[player] : undefined}
       actions={model.info.actions}
-      scoreBar
     />
   );
+  const scoreBar = <ScoreBar scores={[env.fields[0].snake.score, env.fields[1].snake.score]} names={names} />;
   const overlay = status !== "running" && (
     <div className="overlay">
       <p>{overlayMessage(status, env, names, layout)}</p>
@@ -221,6 +221,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
       <div className="game mobile">
         <div className="mobile-top">
           <div className="mobile-status">
+            {scoreBar}
             <span className="timer">残り {remaining} 秒</span>
             <span>
               スコア {names[0]} {env.fields[0].snake.score} : {env.fields[1].snake.score} {names[1]}
@@ -252,6 +253,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
 
   return (
     <div className="game">
+      {scoreBar}
       <div className="topbar">
         <span className="timer">残り {remaining} 秒</span>
         <span className="tally">{tallyText}</span>
@@ -270,6 +272,18 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
         ))}
         {overlay}
       </div>
+    </div>
+  );
+}
+
+/** 2 人のスコアの比で境目を決める共有バー。拮抗していれば真ん中になる */
+function ScoreBar({ scores, names }: { scores: number[]; names: string[] }) {
+  const total = scores[0] + scores[1];
+  const share = total > 0 ? (100 * scores[0]) / total : 50;
+  return (
+    <div className="score-bar" title={`${names[0]} ${scores[0]} : ${scores[1]} ${names[1]}`}>
+      <div className="score-bar-fill" style={{ width: `${share}%`, background: PLAYER_PALETTES[0].body }} />
+      <div className="score-bar-rest" style={{ background: PLAYER_PALETTES[1].body }} />
     </div>
   );
 }
