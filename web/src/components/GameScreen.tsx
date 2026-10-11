@@ -235,6 +235,7 @@ export function GameScreen({ model, mode, assist = "none", onModeChange, speed, 
   useCheatCodes(
     {
       forceWin: mode === "human_vs_ai" ? forceWin : undefined,
+      vsAi: mode !== "human_vs_ai" && onModeChange ? () => onModeChange("human_vs_ai") : undefined,
       aiVsAi: mode !== "ai_vs_ai" && onModeChange ? () => onModeChange("ai_vs_ai") : undefined,
     },
     active,

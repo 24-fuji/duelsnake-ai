@@ -9,6 +9,8 @@ import { useEffect, useRef } from "react";
 export interface CheatContext {
   /** 人間がスコアで AI に勝った状態にする (vs AI の対戦画面) */
   forceWin?: () => void;
+  /** AI との対戦モードに切り替える */
+  vsAi?: () => void;
   /** AI 同士の観戦モードに切り替える */
   aiVsAi?: () => void;
 }
@@ -24,7 +26,8 @@ export const CHEAT_WIN_SCORES: readonly [number, number] = [24, 9];
 
 export const CHEAT_COMMANDS: readonly CheatCommand[] = [
   { name: "WIN FORCE", run: (ctx) => ctx.forceWin?.() },
-  { name: "ai vs ai", run: (ctx) => ctx.aiVsAi?.() },
+  { name: "vsai", run: (ctx) => ctx.vsAi?.() },
+  { name: "aiai", run: (ctx) => ctx.aiVsAi?.() },
 ];
 
 /**
