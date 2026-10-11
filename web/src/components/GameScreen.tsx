@@ -26,8 +26,6 @@ export const KEY_ACTIONS: Record<string, Action> = {
   ArrowRight: "right",
   KeyD: "right",
   Space: "boost",
-  ShiftLeft: "use_item",
-  ShiftRight: "use_item",
   KeyE: "use_item",
 };
 
@@ -181,7 +179,7 @@ export function GameScreen({ model, mode, assist = "none", onModeChange, speed, 
         if (current !== "running") start();
         return;
       }
-      if (e.code === "KeyP" || e.code === "Escape") {
+      if (e.code === "KeyP") {
         if (current === "running") setStatus("paused");
         else if (current === "paused") setStatus("running");
         return;
