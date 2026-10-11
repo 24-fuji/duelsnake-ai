@@ -9,18 +9,23 @@ import { useEffect, useRef } from "react";
 export interface CheatContext {
   /** 人間がスコアで AI に勝った状態にする (vs AI の対戦画面) */
   forceWin?: () => void;
+  /** AI 同士の観戦モードに切り替える */
+  aiVsAi?: () => void;
 }
 
 export interface CheatCommand {
-  /** 打ち込む文字。小文字とスペースで書く */
+  /** 打ち込む文字。大文字は Shift を押しながら、スペースは Shift なしで打つ */
   name: string;
   run: (ctx: CheatContext) => void;
 }
 
-/** `win force` で作る結果のスコア。意味のある値ではない */
+/** `WIN FORCE` で作る結果のスコア。意味のある値ではない */
 export const CHEAT_WIN_SCORES: readonly [number, number] = [24, 9];
 
-export const CHEAT_COMMANDS: readonly CheatCommand[] = [{ name: "win force", run: (ctx) => ctx.forceWin?.() }];
+export const CHEAT_COMMANDS: readonly CheatCommand[] = [
+  { name: "WIN FORCE", run: (ctx) => ctx.forceWin?.() },
+  { name: "ai vs ai", run: (ctx) => ctx.aiVsAi?.() },
+];
 
 /**
  * 入力済みの文字列に1文字足し、どのコマンドの頭にも合わなくなったら捨てる。
@@ -59,7 +64,13 @@ export function useCheatCodes(ctx: CheatContext, enabled: boolean): void {
       const now = performance.now();
       if (now - lastAt > IDLE_RESET_MS) buffer = "";
       lastAt = now;
-      const next = advanceCheatBuffer(buffer, e.key.toLowerCase(), names);
+      // スペースは Shift なしで打つ。Shift 付きのスペースは入力の誤りとして捨てる
+      const key = e.key === " " && e.shiftKey ? "" : e.key;
+      if (key === "") {
+        buffer = "";
+        return;
+      }
+      const next = advanceCheatBuffer(buffer, key, names);
       // 入力中のスペースでページがスクロールしないようにする
       if (next.buffer !== "" || next.matched) e.preventDefault();
       buffer = next.buffer;

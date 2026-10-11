@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { assertModelCompatible } from "./ai/agent";
 import { BUNDLED_MODELS } from "./ai/catalog";
+import { assistLevel } from "./ai/assist";
 import { SnakeModel } from "./ai/model";
 import { itemImageUrl } from "./components/draw";
 import { GameScreen, type Layout, type Mode } from "./components/GameScreen";
@@ -64,6 +65,8 @@ const MODE_OPTIONS: { value: PlayMode; label: string }[] = [
   { value: "ai_vs_ai", label: "観戦" },
   { value: "solo", label: "ソロ" },
 ];
+/** この時間操作がなければ観戦モードにする */
+const IDLE_WATCH_MS = 3 * 60 * 1000;
 /** 表示の切り替えを覚えておく localStorage のキー */
 const LAYOUT_KEY = "duelsnake.layout";
 /** ルール画面を開いたときに積む履歴の印 (history.state に入れる) */
@@ -109,6 +112,12 @@ export function App() {
   );
   const [mode, setMode] = useState<PlayMode>("human_vs_ai");
   const solo = mode === "solo";
+  /** 無操作で観戦モードに切り替わったとき、観戦を自動で始めるか。自分でモードを選んだら false に戻す */
+  const [autoStartWatch, setAutoStartWatch] = useState(false);
+  const changeMode = (next: PlayMode) => {
+    setAutoStartWatch(false);
+    setMode(next);
+  };
   /** 一人モードの制限時間 (秒)。0 は制限なし */
   const [soloTimeLimit, setSoloTimeLimit] = useState(SOLO_DEFAULT_TIME_LIMIT);
   const [difficulty, setDifficulty] = useState("hard");
@@ -119,6 +128,26 @@ export function App() {
   const [showRules, setShowRules] = useState(false);
   /** ルール画面を開く前のスクロール位置。戻ったときに元の位置に戻す */
   const scrollRef = useRef(0);
+
+  // 一定時間操作がなければ観戦モードに切り替えて、観戦を自動で始める
+  useEffect(() => {
+    if (mode === "ai_vs_ai") return;
+    let timer = 0;
+    const arm = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        setAutoStartWatch(true);
+        setMode("ai_vs_ai");
+      }, IDLE_WATCH_MS);
+    };
+    const events = ["keydown", "pointerdown", "pointermove", "touchstart", "wheel"] as const;
+    for (const e of events) window.addEventListener(e, arm, { passive: true });
+    arm();
+    return () => {
+      window.clearTimeout(timer);
+      for (const e of events) window.removeEventListener(e, arm);
+    };
+  }, [mode]);
 
   const changeLayout = (next: Layout) => {
     setLayout(next);
@@ -190,7 +219,6 @@ export function App() {
   const current = board && models ? (models[board] ?? null) : null;
   const info = current?.model.info;
   const difficulties = info?.difficulty ?? [];
-  const randomActionRate = current?.model.randomActionRate(difficulty) ?? 0;
 
   return (
     <div className={`app ${layout}`}>
@@ -206,7 +234,7 @@ export function App() {
               onChange={setBoard}
               options={BUNDLED_MODELS.map((m) => ({ value: m.key, label: `${m.width} × ${m.height}` }))}
             />
-            <Segmented label="モード" value={mode} onChange={setMode} options={MODE_OPTIONS} />
+            <Segmented label="モード" value={mode} onChange={changeMode} options={MODE_OPTIONS} />
             {solo && (
               <label>
                 制限時間
@@ -282,7 +310,9 @@ export function App() {
             key={`${current.id}-${mode}-${difficulty}`}
             model={current.model}
             mode={mode}
-            randomActionRate={randomActionRate}
+            assist={assistLevel(difficulty)}
+            onModeChange={changeMode}
+            autoStart={autoStartWatch}
             speed={mode === "ai_vs_ai" ? speed : 1}
             autoRestart={autoRestart}
             layout={layout}

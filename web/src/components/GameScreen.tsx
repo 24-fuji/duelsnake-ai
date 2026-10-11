@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AiPlayer, type Decision } from "../ai/agent";
+import { collisionAhead, type AssistLevel } from "../ai/assist";
 import type { SnakeModel } from "../ai/model";
 import { CHEAT_WIN_SCORES, useCheatCodes } from "../cheats";
 import { GameEnv, type Action } from "../game/game";
@@ -35,11 +36,16 @@ const AUTO_RESTART_DELAY_MS = 1500;
 interface Props {
   model: SnakeModel;
   mode: Mode;
-  randomActionRate: number;
+  /** 人間が衝突を選んだとき AI の判断に差し替える範囲 */
+  assist?: AssistLevel;
+  /** チートコードでモードを切り替える (App が持つモードを変える) */
+  onModeChange?: (mode: Mode) => void;
   /** ゲームの進行速度の倍率 */
   speed: number;
   /** 試合が終わったら自動で次の試合を始める (AI 同士のみ) */
   autoRestart: boolean;
+  /** 画面を開いた直後に試合を始める */
+  autoStart?: boolean;
   layout: Layout;
   /** false の間 (ルール画面を開いている間) は止めておき、キー入力も受け付けない */
   active: boolean;
@@ -47,15 +53,17 @@ interface Props {
   confettiOnWin?: boolean;
 }
 
-export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, layout, active, confettiOnWin = false }: Props) {
+export function GameScreen({ model, mode, assist = "none", onModeChange, speed, autoRestart, layout, active, confettiOnWin = false }: Props) {
   const rules = useMemo(() => rulesFromConfig(model.info.game), [model]);
   const ais = useMemo(
     () =>
       mode === "human_vs_ai"
-        ? [null, new AiPlayer(model, randomActionRate)]
-        : [new AiPlayer(model, randomActionRate), new AiPlayer(model, randomActionRate)],
-    [model, mode, randomActionRate],
+        ? [null, new AiPlayer(model, 0)]
+        : [new AiPlayer(model, 0), new AiPlayer(model, 0)],
+    [model, mode],
   );
+  /** 人間の補助に使う AI。人間の対戦でなければ使わない */
+  const assistAi = useMemo(() => new AiPlayer(model, 0), [model]);
   const names = mode === "human_vs_ai" ? ["You", "AI"] : ["AI 1", "AI 2"];
 
   const envRef = useRef<GameEnv | null>(null);
@@ -67,6 +75,7 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
   const [version, setVersion] = useState(0);
   /** この結果がチートコードで作ったものか。結果の見出しに小さく印を付ける */
   const [cheated, setCheated] = useState(false);
+  const cheatedRef = useRef(false);
   const [tally, setTally] = useState({ wins: [0, 0], draws: 0 });
   /** 携帯版の AI 同士で大きく映すプレイヤー。もう一方はワイプに映す */
   const [focus, setFocus] = useState(0);
@@ -74,6 +83,9 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+  useEffect(() => {
+    cheatedRef.current = cheated;
+  }, [cheated]);
 
   const activeRef = useRef(active);
   useEffect(() => {
@@ -94,6 +106,12 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
     setVersion((v) => v + 1);
   }, [rules]);
 
+  useEffect(() => {
+    if (autoStart) start();
+    // 開いた直後に一度だけ始める
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const tick = useCallback(() => {
     const env = envRef.current!;
     const inputs: [Action[], Action[]] = [[], []];
@@ -104,9 +122,13 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
         inputs[player].push(decision.action);
       }
     });
-    if (!ais[0]) inputs[0] = inputsRef.current.splice(0);
+    if (!ais[0]) {
+      inputs[0] = inputsRef.current.splice(0);
+      // 補助の対象になる衝突を選んでしまったときは、AI の判断を採用する (AI も衝突を選べばそのまま衝突する)
+      if (collisionAhead(env, 0, inputs[0], assist)) inputs[0] = [assistAi.decide(env, 0).action];
+    }
     env.step(inputs);
-  }, [ais]);
+  }, [ais, assist, assistAi]);
 
   // ゲームループ: 経過時間に応じて決まった間隔でティックを進める
   useEffect(() => {
@@ -190,10 +212,18 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
   );
   const gestures = useGestures(onGesture);
 
-  // チートコード `win force`: 人間が時間切れのスコア判定で AI に勝った結果にする
+  // チートコード `WIN FORCE` (ゲームの状態を問わず使える): 人間が時間切れのスコア判定で AI に勝った結果にする
   const forceWin = useCallback(() => {
     const env = envRef.current!;
-    if (statusRef.current === "over") return;
+    // 試合が終わったあとに入力されたときは、すでに数えた勝敗を取り消して結果を差し替える
+    if (statusRef.current === "over" && !cheatedRef.current && env.result) {
+      const { winner } = env.result;
+      setTally((t) =>
+        winner === null
+          ? { ...t, draws: t.draws - 1 }
+          : { ...t, wins: t.wins.map((n, p) => (p === winner ? n - 1 : n)) },
+      );
+    }
     env.fields.forEach((field, p) => (field.snake.score = CHEAT_WIN_SCORES[p]));
     env.tick = rules.timeLimitTicks;
     env.result = { winner: 0, reason: "time_up" };
@@ -202,7 +232,13 @@ export function GameScreen({ model, mode, randomActionRate, speed, autoRestart, 
     setStatus("over");
     setVersion((v) => v + 1);
   }, [rules]);
-  useCheatCodes({ forceWin: mode === "human_vs_ai" ? forceWin : undefined }, active);
+  useCheatCodes(
+    {
+      forceWin: mode === "human_vs_ai" ? forceWin : undefined,
+      aiVsAi: mode !== "ai_vs_ai" && onModeChange ? () => onModeChange("ai_vs_ai") : undefined,
+    },
+    active,
+  );
 
   const env = envRef.current;
   const remaining = (env.remainingTicks * rules.tickSeconds).toFixed(1);
