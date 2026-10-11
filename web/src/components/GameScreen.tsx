@@ -53,7 +53,7 @@ interface Props {
   confettiOnWin?: boolean;
 }
 
-export function GameScreen({ model, mode, assist = "none", onModeChange, speed, autoRestart, layout, active, confettiOnWin = false }: Props) {
+export function GameScreen({ model, mode, assist = "none", onModeChange, speed, autoRestart, autoStart = false, layout, active, confettiOnWin = false }: Props) {
   const rules = useMemo(() => rulesFromConfig(model.info.game), [model]);
   const ais = useMemo(
     () =>
