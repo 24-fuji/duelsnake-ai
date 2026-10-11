@@ -82,7 +82,7 @@ export function RulesScreen({ game, onBack }: Props) {
             </tr>
             <tr>
               <td>アイテムを使う</td>
-              <td>Shift / E</td>
+              <td>E</td>
               <td>盤面をダブルタップ</td>
             </tr>
             <tr>
@@ -92,7 +92,7 @@ export function RulesScreen({ game, onBack }: Props) {
             </tr>
             <tr>
               <td>一時停止</td>
-              <td>P / Esc</td>
+              <td>P</td>
               <td>「一時停止」ボタン (再開は盤面をタップ)</td>
             </tr>
           </tbody>

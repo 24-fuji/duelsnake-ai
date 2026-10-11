@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { advanceCheatBuffer } from "./cheats";
 
-const NAMES = ["win force", "win now"];
+const NAMES = ["WIN FORCE", "win now"];
 
 function type(text: string) {
   let buffer = "";
@@ -15,17 +15,17 @@ function type(text: string) {
 
 describe("advanceCheatBuffer", () => {
   it("コマンドをそのまま打つと一致する", () => {
-    expect(type("win force")).toBe("win force");
+    expect(type("WIN FORCE")).toBe("WIN FORCE");
     expect(type("win now")).toBe("win now");
   });
 
   it("途中で間違えても、打ち直せば一致する", () => {
-    expect(type("wwin force")).toBe("win force");
-    expect(type("wixwin force")).toBe("win force");
+    expect(type("wWIN FORCE")).toBe("WIN FORCE");
+    expect(type("wixWIN FORCE")).toBe("WIN FORCE");
   });
 
   it("別の文字列では一致しない", () => {
-    expect(type("win")).toBeNull();
-    expect(type("wi nforce")).toBeNull();
+    expect(type("WIN")).toBeNull();
+    expect(type("win force")).toBeNull();
   });
 });

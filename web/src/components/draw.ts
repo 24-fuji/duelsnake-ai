@@ -107,6 +107,9 @@ const EYE_OFFSET: Record<Direction, [number, number]> = {
   right: [1, 0],
 };
 
+/** 林檎を食べた場所の体を膨らませる倍率 */
+const EAT_PULSE_SCALE = 1.1;
+
 function drawSnake(ctx: CanvasRenderingContext2D, field: Field, cell: number, palette: Palette): void {
   const snake = field.snake;
   const len = snake.length;
@@ -114,13 +117,16 @@ function drawSnake(ctx: CanvasRenderingContext2D, field: Field, cell: number, pa
     const p = snake.body[i];
     ctx.globalAlpha = 1 - (0.5 * (i - 1)) / Math.max(1, len - 1);
     ctx.fillStyle = palette.body;
-    ctx.fillRect(p.x * cell + 2, p.y * cell + 2, cell - 4, cell - 4);
+    const scale = snake.eatPulses.includes(i) ? EAT_PULSE_SCALE : 1;
+    const size = (cell - 4) * scale;
+    ctx.fillRect(p.x * cell + (cell - size) / 2, p.y * cell + (cell - size) / 2, size, size);
   }
   ctx.globalAlpha = 1;
 
   const head = snake.head;
   ctx.fillStyle = snake.alive ? palette.head : "#d32f2f";
-  ctx.fillRect(head.x * cell + 1, head.y * cell + 1, cell - 2, cell - 2);
+  const headSize = (cell - 2) * (snake.eatPulses.includes(0) ? EAT_PULSE_SCALE : 1);
+  ctx.fillRect(head.x * cell + (cell - headSize) / 2, head.y * cell + (cell - headSize) / 2, headSize, headSize);
   // 進行方向に目を描く
   const [dx, dy] = EYE_OFFSET[snake.alive ? snake.dir : snake.lastMovedDir];
   const cx = head.x * cell + cell / 2 + dx * cell * 0.22;

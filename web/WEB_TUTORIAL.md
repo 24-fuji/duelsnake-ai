@@ -67,7 +67,7 @@ just web-test     # テストを実行
 「この値を変えたらどうなるか」を試しながら読むのがおすすめです。たとえば次を試してみてください。
 
 - [src/components/draw.ts:20-23](src/components/draw.ts#L20-L23) の色を変える → ヘビの色が変わる
-- [src/components/GameScreen.tsx:16-29](src/components/GameScreen.tsx#L16-L29) にキーを足す → そのキーで操作できる
+- [src/components/GameScreen.tsx:19-30](src/components/GameScreen.tsx#L19-L30) にキーを足す → そのキーで操作できる
 - [src/components/gestures.ts:24](src/components/gestures.ts#L24) の `swipeDistance` を変える → スワイプの感度が変わる
 
 ブラウザの開発者ツール (F12 キー、Mac は Cmd+Option+I) もよく使います。
@@ -214,12 +214,13 @@ API サーバーへの問い合わせも、WebSocket によるリアルタイム
     │                                                 │
     │  JS が動き出し、React が画面を作る                 │
     │  Board が画像を読む: GET ./assets/normal_apple-XXXX.png など
-    │  App がモデルを読む: GET ./assets/snake-model-16x16-XXXX.json (約 1.8MB)
+    │  App が同梱のモデルを全部読む:
+    │  GET ./assets/snake-model-8x8-XXXX.json (約 0.7MB)
+    │  GET ./assets/snake-model-16x16-XXXX.json (約 1.8MB) ほか
     │ ──────────────────────────────────────────────▶ │
     │ ◀────────────── 画像・モデル JSON ────────────── │
     │                                                 │
-    │  ここから先はゲーム中も通信なし                     │
-    │  (盤面を 8x8 に切り替えたときだけ、8x8 のモデルを GET する)
+    │  ここから先はゲーム中も、盤面を切り替えても通信なし │
 ```
 
 ファイル名の `XXXX` はビルドのたびに中身から作られる文字列 (ハッシュ) です。理由は [4.4 節](#44-vite-開発サーバーとビルド) で説明します。
@@ -232,7 +233,8 @@ web/dist/
 └── assets/
     ├── index-Bo95ntBr.js               # 約 176KB: React + src/ の全コード
     ├── index-B06MtCSa.css              # 約 3KB: src/styles.css
-    └── snake-model-16x16-BIUYl9Zr.json # 約 1.8MB: モデル (中身はそのままコピー)
+    ├── snake-model-8x8-XXXXXXXX.json   # 約 0.7MB: モデル (中身はそのままコピー)
+    └── snake-model-16x16-BIUYl9Zr.json # 約 1.8MB: 盤面サイズごとに 1 ファイル
 ```
 
 `dist/index.html` はソースの [index.html](index.html) とほぼ同じですが、`<script src="/src/main.tsx">` がビルドした JS への参照に書き換わっています。
@@ -307,7 +309,7 @@ export const BUNDLED_MODELS = bundledModels(
 }
 ```
 
-- `query: "?url"` は「中身ではなく URL をください」という指定です。これが無いと JSON の中身 (1.8MB) が JS に埋め込まれ、使わない盤面のモデルまで最初に全部ダウンロードすることになります。
+- `query: "?url"` は「中身ではなく URL をください」という指定です。これが無いと JSON の中身 (1.8MB) が JS に埋め込まれ、JS が大きくなって画面が出るまでが遅くなります。URL にしておけば、画面を出してから `fetch` で読めます。
 - `eager: true` は「今すぐ (同期的に) 値をください」という指定です。URL の文字列だけなので軽く、すぐ使えます。
 - こうして、`model/recent-model/` に JSON を置くだけで選択肢が増える仕組みになっています。一覧を手で書く必要はありません。
 
@@ -323,38 +325,49 @@ import normalAppleUrl from "../assets/items/normal_apple.png";
 
 画像は `?url` を付けなくても、Vite が URL の文字列として扱ってくれます (4KB 未満の小さい画像は、ファイルにせず JS に直接埋め込まれます)。
 
-### 2.4 読み込みの競合を防ぐ
+### 2.4 モデルを最初に全部読む
 
-盤面を 16×16 から 8×8 に切り替えると、8×8 のモデルを取りに行きます。
-もし 16×16 の読み込みが終わる前に切り替えたら、「あとから選んだ 8×8」より「先に選んだ 16×16」の結果が遅れて届き、画面が 16×16 に戻ってしまうかもしれません。これを **競合状態** (race condition) と呼びます。
+このアプリは、ページを開いた時点で同梱のモデルを全部読み込み、それ以降は通信しません。盤面を切り替えても、読み込み済みのモデルに持ち替えるだけです。
 
-App ではこれを防いでいます。
-
-出典: [src/App.tsx:121-138](src/App.tsx#L121-L138)
+出典: [src/App.tsx:196-217](src/App.tsx#L196-L217)
 
 ```tsx
 useEffect(() => {
-  const entry = BUNDLED_MODELS.find((m) => m.key === board);
-  if (!entry) return;
-  // 読み込み中に別の盤面を選んだら、古いほうの結果は捨てる
   let cancelled = false;
-  SnakeModel.load(entry.url)
-    .then((model) => {
-      if (cancelled) return;
-      setCurrent(loaded(model));
-      setError(null);
-    })
-    .catch((e: unknown) => {
-      if (!cancelled) setError(`${entry.path} を読み込めません: ${String(e)}`);
+  Promise.allSettled(BUNDLED_MODELS.map((m) => SnakeModel.load(m.url))).then((results) => {
+    if (cancelled) return;
+    const next: Record<string, LoadedModel> = {};
+    const errors: string[] = [];
+    results.forEach((r, i) => {
+      const entry = BUNDLED_MODELS[i];
+      try {
+        if (r.status === "rejected") throw r.reason;
+        next[entry.key] = loaded(r.value);
+      } catch (e) {
+        errors.push(`${entry.path} を読み込めません: ${String(e)}`);
+      }
     });
+    setModels(next);
+    setError(errors.length > 0 ? errors.join("\n") : null);
+  });
   return () => {
     cancelled = true;
   };
-}, [board]);
+}, []);
 ```
 
-`useEffect` から返した関数 (クリーンアップ) は、`board` が変わって次の effect が動く直前に呼ばれます。
-そこで `cancelled = true` にしておけば、古いほうの読み込みが終わっても結果を捨てられます。`useEffect` の詳しい動きは [9.1 節](#91-useeffect-描画のあとに外の世界とやりとりする) で説明します。
+- `Promise.allSettled` は、いくつもの Promise を同時に待ち、**全部が終わったら** 成功・失敗をまとめて返します。`Promise.all` は 1 つでも失敗するとすぐ失敗になりますが、`allSettled` なら 1 つのモデルが壊れていても、ほかの盤面では遊べます。
+- 失敗の理由は 2 種類あります。読み込みそのものの失敗 (`r.status === "rejected"`) と、読めたけれど Web 版と合わない失敗 (`loaded` が投げる例外、[14.2 節](#142-読み込みと確認)) です。どちらも `catch` でまとめてエラーの一覧に入れています。
+- `cancelled` は、読み込みが終わる前に部品が消えたら結果を捨てるための印です。`useEffect` から返した関数 (クリーンアップ) は、部品が消えるとき (と、開発中の StrictMode が effect をやり直すとき) に呼ばれます。消えた部品の state を更新しないようにする、定番の書き方です。`useEffect` の詳しい動きは [9.1 節](#91-useeffect-描画のあとに外の世界とやりとりする) で説明します。
+
+選んだ盤面のモデルは、描くたびに `models[board]` で引くだけです ([src/App.tsx:219](src/App.tsx#L219))。
+
+最初に全部読むか、選ばれたときに読むかは、モデルの大きさとの相談です。
+
+| 読み方 | 良いところ | 気をつけること |
+|---|---|---|
+| 最初に全部読む (このアプリ) | 盤面の切り替えが一瞬。読み込み後はネットワークが切れても遊べる | 最初の通信が多い。モデルが増えるほど重くなる |
+| 選ばれたときに読む | 最初の通信が少ない | 切り替えのたびに待つ。読み込み中に別の盤面を選ぶと、古いほうの結果が遅れて届く競合 (race condition) を防ぐ必要がある |
 
 ### 2.5 キャッシュ
 
@@ -606,7 +619,9 @@ web/
 ├── vite.config.js          # Vite の設定 (4.3 節)
 └── src/
     ├── main.tsx            # 入口。React を #root に描く
-    ├── App.tsx             # 設定欄・モデルの読み込み・画面の切り替え
+    ├── App.tsx             # 設定欄・モデルの読み込み・画面の切り替え・無操作で観戦に切り替え
+    ├── cheats.ts           # 動作確認用のチートコード (13.4 節)
+    ├── cheats.test.ts      #   入力の照合のテスト
     ├── styles.css          # 全体のスタイル
     ├── game/               # ゲームのルール。React もブラウザの API も使わない
     │   ├── rules.ts        #   モデル JSON の game → ティック単位のルール
@@ -621,7 +636,9 @@ web/
     │   ├── model.ts        #   モデル JSON の読み込みと順伝播
     │   ├── observation.ts  #   盤面 → 入力の数値配列
     │   ├── agent.ts        #   AiPlayer: 観測 → 推論 → 行動
-    │   └── agent.test.ts   #   同梱モデルで最後まで対戦できるかのテスト
+    │   ├── agent.test.ts   #   同梱モデルで最後まで対戦できるかのテスト
+    │   ├── assist.ts       #   難易度: 人が衝突を選んだら AI の判断に差し替えるか (14.6 節)
+    │   └── assist.test.ts  #   補助の範囲のテスト
     ├── components/         # 画面 (React) と、画面の手伝い
     │   ├── GameScreen.tsx  #   対戦画面。ゲームループ・入力・レイアウト
     │   ├── SoloScreen.tsx  #   一人モードの画面
@@ -629,6 +646,7 @@ web/
     │   ├── Board.tsx       #   盤面の <canvas>
     │   ├── draw.ts         #   Canvas への描き方 (React を使わない)
     │   ├── PlayerPanel.tsx #   スコア・所持アイテム・Q 値の表
+    │   ├── Confetti.tsx    #   むずかしいで勝ったときの紙吹雪
     │   ├── gestures.ts     #   タッチ操作の見分け方と、React 用のフック
     │   └── gestures.test.ts
     └── assets/             # 画像
@@ -724,13 +742,13 @@ createRoot(document.getElementById("root")!).render(
 `App` ([src/App.tsx](src/App.tsx)) は、最初はモデルを持っていません。起動の流れは次のとおりです。
 
 1. `BUNDLED_MODELS` (モデルの URL の一覧) は、ファイルを読み込んだ時点でもうできています ([2.3 節](#23-url-はどこから来るのか))。
-2. `App` の最初の描画: `current` (読み込んだモデル) が `null` なので「モデルを読み込み中...」と出します ([src/App.tsx:237-238](src/App.tsx#L237-L238))。
-3. 描画のあと、`useEffect` がモデルの `fetch` を始めます ([src/App.tsx:121-138](src/App.tsx#L121-L138))。
-4. 読み込みが終わると `setCurrent(...)` が呼ばれ、React が `App` を描き直します。今度は `current` があるので `GameScreen` を描きます ([src/App.tsx:248-257](src/App.tsx#L248-L257))。
+2. `App` の最初の描画: `models` (読み込んだモデル) が `null` なので `current` も `null` になり、「モデルを読み込み中...」と出します ([src/App.tsx:298-299](src/App.tsx#L298-L299))。
+3. 描画のあと、`useEffect` が全部のモデルの `fetch` を始めます ([src/App.tsx:196-217](src/App.tsx#L196-L217))。
+4. 読み込みが終わると `setModels(...)` が呼ばれ、React が `App` を描き直します。今度は `current` があるので `GameScreen` を描きます ([src/App.tsx:309-321](src/App.tsx#L309-L321))。
 5. `GameScreen` は「Enter キーで開始」の状態 (`ready`) で待ちます。
 
 ```tsx
-// src/App.tsx:237-258 (要点)
+// src/App.tsx:298-322 (要点)
 {!current ? (
   !error && <p>モデルを読み込み中...</p>
 ) : mode === "solo" ? (
@@ -756,7 +774,7 @@ const tickMs = (rules.tickSeconds * 1000) / speed;  // 再代入しない
 let last = performance.now();                       // 再代入する
 ```
 
-出典: [src/components/GameScreen.tsx:107-110](src/components/GameScreen.tsx#L107-L110)
+出典: [src/components/GameScreen.tsx:134-135](src/components/GameScreen.tsx#L134-L135)
 
 - 基本は `const` を使い、あとで値を入れ替えるものだけ `let` にします。`var` は使いません。
 - `const` でも、オブジェクトや配列の **中身** は変えられます (`const a = []; a.push(1)` は OK)。変えられないのは「別の値を入れ直すこと」です。
@@ -765,7 +783,7 @@ let last = performance.now();                       // 再代入する
 
 ```ts
 let pending = 0;          // number と推論される
-const names = ["あなた", "AI"];  // string[] と推論される
+const names = ["You", "AI"];   // string[] と推論される
 ```
 
 TypeScript は、多くの場合型を自分で推論します。関数の引数と、公開する関数の戻り値にだけ型を書くのが普通です。
@@ -839,7 +857,7 @@ export type Gesture =
   | { kind: "double_tap" };
 ```
 
-`if (gesture.kind === "swipe")` の中では、TypeScript が「ここでは swipe だ」と分かるので `gesture.direction` を使えます ([src/components/GameScreen.tsx:178](src/components/GameScreen.tsx#L178))。
+`if (gesture.kind === "swipe")` の中では、TypeScript が「ここでは swipe だ」と分かるので `gesture.direction` を使えます ([src/components/GameScreen.tsx:205](src/components/GameScreen.tsx#L205))。
 `kind` を確かめずに `gesture.direction` を使うとエラーになります。Rust の `enum` と `match` に近い考え方です。
 
 ### 7.5 null と undefined の扱い
@@ -848,9 +866,9 @@ export type Gesture =
 
 | 書き方 | 意味 | 例 |
 |---|---|---|
-| `if (x) ...` / `if (!x) return` | 無ければ先に抜ける | [src/App.tsx:123](src/App.tsx#L123) `if (!entry) return;` |
-| `x?.y` | x が null/undefined なら undefined、あれば x.y | [src/App.tsx:140](src/App.tsx#L140) `current?.model.info` |
-| `x ?? y` | x が null/undefined なら y | [src/App.tsx:141](src/App.tsx#L141) `info?.difficulty ?? []` |
+| `if (x) ...` / `if (!x) return` | 無ければ先に抜ける | [src/App.tsx:199](src/App.tsx#L199) `if (cancelled) return;` |
+| `x?.y` | x が null/undefined なら undefined、あれば x.y | [src/App.tsx:220](src/App.tsx#L220) `current?.model.info` |
+| `x ?? y` | x が null/undefined なら y | [src/App.tsx:221](src/App.tsx#L221) `info?.difficulty ?? []` |
 | `x ??= y` | x が null/undefined のときだけ y を入れる | [src/components/draw.ts:50](src/components/draw.ts#L50) `spritesLoading ??= ...` |
 | `x!` | 「必ずある」と言い切る (確かめない) | [src/main.tsx:6](src/main.tsx#L6) `getElementById("root")!` |
 
@@ -891,7 +909,7 @@ export const ACTIONS: readonly Action[] = ["up", "down", "left", "right", "boost
 
 ゲームの状態は class で書いています。
 
-出典: [src/game/snake.ts:43-79](src/game/snake.ts#L43-L79) (抜粋)
+出典: [src/game/snake.ts:46-84](src/game/snake.ts#L46-L84) (抜粋)
 
 ```ts
 export class Snake {
@@ -939,10 +957,9 @@ React の画面は関数で書き、ゲームの状態は class で書く、と�
 ネットワークや画像の読み込みは時間がかかります。JavaScript は、待っている間も画面を止めないよう、**非同期** に処理します。
 
 ```ts
-// then でつなぐ書き方 (src/App.tsx:126-134)
-SnakeModel.load(entry.url)
-  .then((model) => { /* 成功したとき */ })
-  .catch((e: unknown) => { /* 失敗したとき */ });
+// then でつなぐ書き方 (src/App.tsx:198)
+Promise.allSettled(BUNDLED_MODELS.map((m) => SnakeModel.load(m.url)))
+  .then((results) => { /* 全部終わったとき。results に成功・失敗が並ぶ */ });
 
 // async/await の書き方 (src/ai/model.ts:83-89)
 static async load(url: string): Promise<SnakeModel> {
@@ -953,7 +970,7 @@ static async load(url: string): Promise<SnakeModel> {
 
 - `async` を付けた関数は、必ず Promise を返します。
 - `await` は、Promise の値が届くまで **その関数の続きだけ** を待ちます。その間、ブラウザは他の仕事 (描画やキー入力) を続けます。
-- `Promise.all([...])` は、いくつもの Promise を同時に待ちます。画像 6 枚を並行して読むのに使っています ([src/components/draw.ts:50](src/components/draw.ts#L50))。
+- `Promise.all([...])` は、いくつもの Promise を同時に待ちます。画像 6 枚を並行して読むのに使っています ([src/components/draw.ts:50](src/components/draw.ts#L50))。1 つでも失敗すると全体が失敗になるので、失敗しても続けたいモデルの読み込みには `Promise.allSettled` を使っています ([2.4 節](#24-モデルを最初に全部読む))。
 - `useEffect` に渡す関数は async にできないので、App では `.then` でつないでいます。
 
 ### 7.9 import と export
@@ -980,10 +997,10 @@ import normalAppleUrl from "../assets/items/normal_apple.png";  // default を�
 | `filter` | 条件に合う要素だけの新しい配列 | [src/game/field.ts:91](src/game/field.ts#L91) 頭から遠いマスだけ残す |
 | `find` / `findIndex` | 最初に条件に合う要素 / その位置 | [src/game/field.ts:139](src/game/field.ts#L139) 頭の位置にあるアイテムを探す |
 | `some` / `every` | どれか 1 つ / 全部が条件に合うか | [src/game/field.ts:62](src/game/field.ts#L62) お邪魔ブロックがあるか |
-| `forEach` | 各要素で何かする (戻り値なし) | [src/components/GameScreen.tsx:93](src/components/GameScreen.tsx#L93) |
+| `forEach` | 各要素で何かする (戻り値なし) | [src/components/GameScreen.tsx:116](src/components/GameScreen.tsx#L116) |
 | `flatMap` | 変換して 1 段平らにする。0 個か 1 個を返せば filter と map を同時にできる | [src/ai/catalog.ts:28-32](src/ai/catalog.ts#L28-L32) |
-| `splice(0)` | 全要素を取り出して、元の配列を空にする | [src/components/GameScreen.tsx:100](src/components/GameScreen.tsx#L100) たまったキー入力を取り出す |
-| `unshift` / `pop` | 先頭に足す / 末尾を取り除く | [src/game/snake.ts:129-133](src/game/snake.ts#L129-L133) ヘビの前進 |
+| `splice(0)` | 全要素を取り出して、元の配列を空にする | [src/components/GameScreen.tsx:124](src/components/GameScreen.tsx#L124) たまったキー入力を取り出す |
+| `unshift` / `pop` | 先頭に足す / 末尾を取り除く | [src/game/snake.ts:135-139](src/game/snake.ts#L135-L139) ヘビの前進 |
 
 `...` (スプレッド構文) は、配列やオブジェクトを展開します。
 
@@ -1062,7 +1079,7 @@ export function PlayerPanel({ title, field, rules, palette, decision, actions, h
 - `heldItems = true` のように、省略したときの値を書けます。
 - 親は HTML のタグのように呼びます。
 
-出典: [src/components/GameScreen.tsx:198-207](src/components/GameScreen.tsx#L198-L207)
+出典: [src/components/GameScreen.tsx:255-262](src/components/GameScreen.tsx#L255-L262)
 
 ```tsx
 <PlayerPanel
@@ -1075,7 +1092,7 @@ export function PlayerPanel({ title, field, rules, palette, decision, actions, h
 />
 ```
 
-`{}` の中には JavaScript の式を書けます。文字列だけなら `title="あなた"` とも書けます ([src/components/SoloScreen.tsx:175](src/components/SoloScreen.tsx#L175))。
+`{}` の中には JavaScript の式を書けます。文字列だけなら `title="You"` とも書けます ([src/components/SoloScreen.tsx:175](src/components/SoloScreen.tsx#L175))。
 
 ### 8.3 JSX の書き方
 
@@ -1090,7 +1107,7 @@ export function PlayerPanel({ title, field, rules, palette, decision, actions, h
 
 条件によって出し分けるときは、`&&` と三項演算子 `? :` を使います。
 
-出典: [src/App.tsx:233-234](src/App.tsx#L233-L234)
+出典: [src/App.tsx:293-294](src/App.tsx#L293-L294)
 
 ```tsx
 {info && <p className="model-info">最終更新: {new Date(info.created_at).toLocaleString()}</p>}
@@ -1101,30 +1118,46 @@ export function PlayerPanel({ title, field, rules, palette, decision, actions, h
 
 配列から要素を並べるときは `map` を使い、各要素に `key` を付けます。
 
-出典: [src/App.tsx:154-160](src/App.tsx#L154-L160)
+出典: [src/App.tsx:40-58](src/App.tsx#L40-L58) (設定欄の切り替えボタン `Segmented` の中)
 
 ```tsx
-<select value={board ?? ""} onChange={(e) => setBoard(e.target.value)}>
-  {BUNDLED_MODELS.map((m) => (
-    <option key={m.key} value={m.key}>
-      {m.width} × {m.height}
-    </option>
+<div className="segmented" role="radiogroup" aria-label={label}>
+  {options.map((o) => (
+    <button
+      key={o.value}
+      type="button"
+      role="radio"
+      aria-checked={value === o.value}
+      className={value === o.value ? "selected" : ""}
+      disabled={disabled}
+      onClick={(e) => {
+        onChange(o.value);
+        // フォーカスが残ると、Enter やスペースをゲームに渡せないので外す
+        e.currentTarget.blur();
+      }}
+    >
+      {o.label}
+    </button>
   ))}
-</select>
+</div>
 ```
 
 `key` は、描き直したときに「どの要素が前回のどれにあたるか」を React が見分けるための印です。配列の中で重ならない値にします。
 
-`<>...</>` (Fragment) は、余計な `div` を作らずに要素をまとめる書き方です ([src/components/PlayerPanel.tsx:52-57](src/components/PlayerPanel.tsx#L52-L57))。
+`Segmented` は盤面・モード・難易度・速度・表示の 5 つの設定欄で使い回している部品です。選択肢 (`options`) と今の値 (`value`)、変わったときの関数 (`onChange`) を props で受け取るだけで、自分では state を持ちません。
+`function Segmented<T extends string | number>` と型引数 (ジェネリクス) を付けているので、盤面なら `string`、速度なら `number` と、使う側の値の型がそのまま `onChange` の引数の型になります ([src/App.tsx:24-36](src/App.tsx#L24-L36))。
+
+`<>...</>` (Fragment) は、余計な `div` を作らずに要素をまとめる書き方です ([src/components/PlayerPanel.tsx:56-59](src/components/PlayerPanel.tsx#L56-L59))。
 
 ### 8.4 state: 変わる値を持つ
 
 **state** は、コンポーネントが覚えておく値で、変わると画面が描き直されます。`useState` で作ります。
 
-出典: [src/App.tsx:64-71](src/App.tsx#L64-L71)
+出典: [src/App.tsx:113-126](src/App.tsx#L113-L126) (抜粋)
 
 ```tsx
 const [mode, setMode] = useState<PlayMode>("human_vs_ai");
+const [autoStartWatch, setAutoStartWatch] = useState(false);
 const [difficulty, setDifficulty] = useState("hard");
 const [speed, setSpeed] = useState(1);
 const [autoRestart, setAutoRestart] = useState(true);
@@ -1133,11 +1166,11 @@ const [layout, setLayout] = useState(initialLayout);
 
 - `useState(初期値)` は `[今の値, 値を変える関数]` を返します。
 - `setMode("ai_vs_ai")` を呼ぶと、React が `App` を呼び直し、今度は `mode` が `"ai_vs_ai"` になっています。
-- `useState(initialLayout)` のように **関数そのもの** を渡すと、最初の 1 回だけその関数を呼んで初期値にします。`initialLayout` は localStorage を読むので、毎回呼ばないようにしています ([src/App.tsx:32-40](src/App.tsx#L32-L40))。
+- `useState(initialLayout)` のように **関数そのもの** を渡すと、最初の 1 回だけその関数を呼んで初期値にします。`initialLayout` は localStorage を読むので、毎回呼ばないようにしています ([src/App.tsx:80-88](src/App.tsx#L80-L88))。
 
 前の値から次の値を作るときは、関数を渡します。
 
-出典: [src/components/GameScreen.tsx:125-129](src/components/GameScreen.tsx#L125-L129)
+出典: [src/components/GameScreen.tsx:152-156](src/components/GameScreen.tsx#L152-L156)
 
 ```tsx
 setTally((t) =>
@@ -1152,7 +1185,7 @@ setTally((t) =>
 
 ### 8.5 入力欄を state とつなぐ (制御されたコンポーネント)
 
-出典: [src/App.tsx:216-224](src/App.tsx#L216-L224)
+出典: [src/App.tsx:275-280](src/App.tsx#L275-L280)
 
 ```tsx
 <input
@@ -1171,13 +1204,16 @@ setTally((t) =>
 
 `key` は、リストの要素だけでなく、1 つの部品にも付けられます。**key が変わると、React はその部品を捨てて新しく作り直します**。中の state もすべて初期値に戻ります。
 
-出典: [src/App.tsx:248-257](src/App.tsx#L248-L257)
+出典: [src/App.tsx:309-321](src/App.tsx#L309-L321)
 
 ```tsx
 <GameScreen
   key={`${current.id}-${mode}-${difficulty}`}
   model={current.model}
   mode={mode}
+  assist={assistLevel(difficulty)}
+  onModeChange={changeMode}
+  autoStart={autoStartWatch}
   ...
 />
 ```
@@ -1187,13 +1223,16 @@ setTally((t) =>
 
 一方、速度 (`speed`) は `key` に入れていません。速度を変えても試合を続けたいからです。
 
-`current.id` は、モデルを読み込むたびに増える番号です ([src/App.tsx:48-53](src/App.tsx#L48-L53))。同じ盤面を読み直しても、画面を作り直せるようにしています。
+`current.id` は、モデルを読み込むたびに増える番号です ([src/App.tsx:96-101](src/App.tsx#L96-L101))。盤面ごとに別の番号なので、盤面を切り替えたときも画面が作り直されます。
+
+子から親の state を変えたいときは、親が関数を props で渡します。`onModeChange={changeMode}` がその例で、`GameScreen` の中のチートコード ([13.4 節](#134-文字の並びを見張る-チートコード)) から `App` のモードを切り替えています。
+state は `App` に 1 つだけ置き、子は「変えてほしい」と頼むだけにすると、どこで値が変わるかを追いやすくなります。
 
 ### 8.7 画面を消さずに隠す
 
 ルール画面を開いている間、ゲーム画面は消さずに `hidden` で隠しています。
 
-出典: [src/App.tsx:146-148](src/App.tsx#L146-L148)
+出典: [src/App.tsx:225-227](src/App.tsx#L225-L227)
 
 ```tsx
 {showRules && current && <RulesScreen game={current.model.info.game} onBack={closeRules} />}
@@ -1203,7 +1242,7 @@ setTally((t) =>
 
 `{showRules ? <RulesScreen/> : <GameScreen/>}` と書くと、ルール画面を開いた時点で `GameScreen` が消え、試合の状態も消えます。
 消さずに隠せば、state は残ったままなので、戻ると続きから遊べます。
-その代わり、隠れている間も動き続けないよう、`active` という props で止めています ([src/components/GameScreen.tsx:72-76](src/components/GameScreen.tsx#L72-L76))。
+その代わり、隠れている間も動き続けないよう、`active` という props で止めています ([src/components/GameScreen.tsx:88-92](src/components/GameScreen.tsx#L88-L92))。
 
 ---
 
@@ -1238,7 +1277,7 @@ useEffect(() => {
 
 **イベントの登録と解除**
 
-出典: [src/components/GameScreen.tsx:145-167](src/components/GameScreen.tsx#L145-L167) (要点)
+出典: [src/components/GameScreen.tsx:172-194](src/components/GameScreen.tsx#L172-L194) (要点)
 
 ```tsx
 useEffect(() => {
@@ -1252,7 +1291,7 @@ useEffect(() => {
 
 **タイマー**
 
-出典: [src/components/GameScreen.tsx:139-143](src/components/GameScreen.tsx#L139-L143)
+出典: [src/components/GameScreen.tsx:166-170](src/components/GameScreen.tsx#L166-L170)
 
 ```tsx
 useEffect(() => {
@@ -1264,6 +1303,39 @@ useEffect(() => {
 
 AI どうしの試合が終わったら、1.5 秒後に次の試合を始めます。
 待っている間に「自動で次の試合」のチェックを外すと、`autoRestart` が変わってクリーンアップが動き、`clearTimeout` でタイマーが取り消されます。
+
+**イベントとタイマーの組み合わせ: 無操作の検出**
+
+出典: [src/App.tsx:132-150](src/App.tsx#L132-L150)
+
+```tsx
+// 一定時間操作がなければ観戦モードに切り替えて、観戦を自動で始める
+useEffect(() => {
+  if (mode === "ai_vs_ai") return;
+  let timer = 0;
+  const arm = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      setAutoStartWatch(true);
+      setMode("ai_vs_ai");
+    }, IDLE_WATCH_MS);
+  };
+  const events = ["keydown", "pointerdown", "pointermove", "touchstart", "wheel"] as const;
+  for (const e of events) window.addEventListener(e, arm, { passive: true });
+  arm();
+  return () => {
+    window.clearTimeout(timer);
+    for (const e of events) window.removeEventListener(e, arm);
+  };
+}, [mode]);
+```
+
+3 分 (`IDLE_WATCH_MS`) 操作が無いと観戦モードに切り替え、観戦を自動で始めます。
+
+- 操作のイベントが来るたびに `arm` がタイマーを仕掛け直します。最後の操作から 3 分たったときだけ、タイマーが最後まで進みます。
+- `{ passive: true }` は「このハンドラーは `preventDefault` を呼ばない」という約束です。スクロールやタッチのイベントで、ブラウザがハンドラーの終わりを待たずに画面を動かせます。
+- すでに観戦モードなら何もしません (`if (mode === "ai_vs_ai") return;`)。モードが変わると、クリーンアップでイベントとタイマーを外してから、新しいモードでやり直します。
+- 自動で始めるかどうかは `autoStartWatch` という state で `GameScreen` に伝えます。`GameScreen` は作られた直後に 1 回だけ、`autoStart` が `true` なら試合を始めます ([src/components/GameScreen.tsx:107-111](src/components/GameScreen.tsx#L107-L111))。自分でモードを選んだときは `changeMode` が `autoStartWatch` を `false` に戻すので、勝手には始まりません ([src/App.tsx:117-120](src/App.tsx#L117-L120))。
 
 **監視 (ResizeObserver)**
 
@@ -1279,7 +1351,7 @@ useEffect(() => {
 }, [fill]);
 ```
 
-**通信** は [2.4 節](#24-読み込みの競合を防ぐ)、**ゲームループ** は [11 章](#11-ゲームループ-requestanimationframe-と固定ティック)、**Canvas への描画** は [12 章](#12-描画-canvas-と-dom-の使い分け) で見ます。
+**通信** は [2.4 節](#24-モデルを最初に全部読む)、**ゲームループ** は [11 章](#11-ゲームループ-requestanimationframe-と固定ティック)、**Canvas への描画** は [12 章](#12-描画-canvas-と-dom-の使い分け) で見ます。
 
 ### 9.2 useRef: 描き直しを起こさない入れ物
 
@@ -1300,7 +1372,7 @@ return <canvas ref={canvasRef} ... />;
 
 **(2) ゲームの状態を持つ**
 
-出典: [src/components/GameScreen.tsx:57-60](src/components/GameScreen.tsx#L57-L60)
+出典: [src/components/GameScreen.tsx:67-70](src/components/GameScreen.tsx#L67-L70)
 
 ```tsx
 const envRef = useRef<GameEnv | null>(null);
@@ -1318,7 +1390,7 @@ const inputsRef = useRef<Action[]>([]);
 
 **(3) イベントハンドラーから最新の state を読む**
 
-出典: [src/components/GameScreen.tsx:61-70](src/components/GameScreen.tsx#L61-L70)
+出典: [src/components/GameScreen.tsx:71-83](src/components/GameScreen.tsx#L71-L83) (抜粋)
 
 ```tsx
 const [status, setStatus] = useState<Status>("ready");
@@ -1335,34 +1407,37 @@ useEffect(() => {
 - キー入力のハンドラーを作ったときの `status` が `"ready"` なら、そのハンドラーの中の `status` はずっと `"ready"` のままです。
 - ref は、どの時点で作った関数からも同じ入れ物 (`statusRef`) を見るので、`statusRef.current` は常に最新です。
 
-キーのハンドラーは `statusRef.current` を読んでいます ([src/components/GameScreen.tsx:149](src/components/GameScreen.tsx#L149))。
-こうすると、`status` が変わるたびにハンドラーを登録し直さずに済みます。`active` も同じ理由で `activeRef` を持っています ([src/components/GameScreen.tsx:72-76](src/components/GameScreen.tsx#L72-L76))。
+キーのハンドラーは `statusRef.current` を読んでいます ([src/components/GameScreen.tsx:176](src/components/GameScreen.tsx#L176))。
+こうすると、`status` が変わるたびにハンドラーを登録し直さずに済みます。`active` も同じ理由で `activeRef` を持っています ([src/components/GameScreen.tsx:88-92](src/components/GameScreen.tsx#L88-L92))。チートコードで結果を作ったかどうかの `cheated` も、同じく `cheatedRef` を持っています ([src/components/GameScreen.tsx:84-86](src/components/GameScreen.tsx#L84-L86))。
 
 ### 9.3 useMemo: 重い計算や、作り直したくないものを覚える
 
-出典: [src/components/GameScreen.tsx:47-54](src/components/GameScreen.tsx#L47-L54)
+出典: [src/components/GameScreen.tsx:55-64](src/components/GameScreen.tsx#L55-L64)
 
 ```tsx
 const rules = useMemo(() => rulesFromConfig(model.info.game), [model]);
 const ais = useMemo(
   () =>
     mode === "human_vs_ai"
-      ? [null, new AiPlayer(model, randomActionRate)]
-      : [new AiPlayer(model, randomActionRate), new AiPlayer(model, randomActionRate)],
-  [model, mode, randomActionRate],
+      ? [null, new AiPlayer(model, 0)]
+      : [new AiPlayer(model, 0), new AiPlayer(model, 0)],
+  [model, mode],
 );
+/** 人間の補助に使う AI。人間の対戦でなければ使わない */
+const assistAi = useMemo(() => new AiPlayer(model, 0), [model]);
 ```
 
 `useMemo(関数, [依存])` は、依存が変わったときだけ関数を呼び直し、それ以外は前回の結果を返します。
 
 - `rules` は毎回計算しても軽いですが、**毎回別のオブジェクトになる** と、`rules` に依存する `useEffect` や `useCallback` が毎回動いてしまいます。`useMemo` で同じオブジェクトを保つのが主な目的です。
 - `AiPlayer` は入力用の `Float32Array` を中に持っているので、毎回作り直さないようにしています。
+- `AiPlayer` の第 2 引数はランダムに行動する確率です。Web 版の難易度は AI を弱くするのではなく人を補助する形にしたので ([14.6 節](#146-難易度-人の操作を補助する))、いつも 0 (最善の手だけを選ぶ) を渡しています。
 
 ### 9.4 useCallback: 関数を覚える
 
 `useCallback(関数, [依存])` は `useMemo(() => 関数, [依存])` と同じで、関数を覚えておきます。
 
-出典: [src/components/GameScreen.tsx:78-88](src/components/GameScreen.tsx#L78-L88)
+出典: [src/components/GameScreen.tsx:94-105](src/components/GameScreen.tsx#L94-L105)
 
 ```tsx
 const start = useCallback(() => {
@@ -1371,6 +1446,7 @@ const start = useCallback(() => {
     decisionsRef.current = [null, null];
   }
   inputsRef.current = [];
+  setCheated(false);
   (document.activeElement as HTMLElement | null)?.blur?.();
   setStatus("running");
   setVersion((v) => v + 1);
@@ -1412,7 +1488,7 @@ export function useGestures(onGesture: (gesture: Gesture) => void) {
 
 - `GestureRecognizer` は 1 回だけ作り (`useMemo` の依存が `[]`)、コールバックは ref 経由で最新のものを呼びます ([9.2 節](#92-useref-描き直しを起こさない入れ物) の (3) と同じ考え方)。
 - 部品が消えるときに `recognizer.release()` で長押しのタイマーを止めます。
-- 戻り値はイベントハンドラーの詰め合わせで、使う側は `<div {...gestures}>` と展開するだけです ([src/components/GameScreen.tsx:243](src/components/GameScreen.tsx#L243))。
+- 戻り値はイベントハンドラーの詰め合わせで、使う側は `<div {...gestures}>` と展開するだけです ([src/components/GameScreen.tsx:329](src/components/GameScreen.tsx#L329))。
 - 対戦画面と一人モードの画面の両方で使っています。
 
 ### 9.6 どのフックを使うかの早見表
@@ -1424,9 +1500,9 @@ export function useGestures(onGesture: (gesture: Gesture) => void) {
 | 通信・タイマー・イベント登録・Canvas への描画 | `useEffect` (必ずクリーンアップを書く) |
 | 他のフックの依存に入れるオブジェクトを安定させたい | `useMemo` |
 | 他のフックの依存に入れる関数を安定させたい | `useCallback` |
-| 他の値から計算できる値 | フックを使わず、普通に計算する (例: [src/App.tsx:140-142](src/App.tsx#L140-L142)) |
+| 他の値から計算できる値 | フックを使わず、普通に計算する (例: [src/App.tsx:219-221](src/App.tsx#L219-L221)、[src/App.tsx:313](src/App.tsx#L313) の `assistLevel(difficulty)`) |
 
-最後の行は大事です。「`difficulty` が変わったら `randomActionRate` を state に入れ直す」のような書き方はせず、描くたびに計算します。state を増やすほど、値が食い違うバグが増えます。
+最後の行は大事です。「`difficulty` が変わったら補助の範囲を state に入れ直す」のような書き方はせず、描くたびに `assistLevel(difficulty)` で計算します。state を増やすほど、値が食い違うバグが増えます。
 
 ---
 
@@ -1511,7 +1587,7 @@ step(inputs: PlayerInputs): void {
 
 ヘビは毎ティック動くわけではありません。通常は 2 ティックに 1 回、ブースト中は毎ティック動きます。
 
-出典: [src/game/snake.ts:97-113](src/game/snake.ts#L97-L113)
+出典: [src/game/snake.ts:102-118](src/game/snake.ts#L102-L118)
 
 ```ts
 advanceTimers(rules: Rules): boolean {
@@ -1535,12 +1611,12 @@ advanceTimers(rules: Rules): boolean {
 
 「残りティック数を 1 ずつ減らし、0 になったら何かする」という **カウントダウン** は、ゲームで一番よく使う形です。ブーストの持続・再使用までの待ち・アイテムの再出現・お邪魔ブロックが届くまでの時間、すべてこの形で書いています。
 
-進む向きには `dir` と `lastMovedDir` の 2 つがあります ([src/game/snake.ts:46-49](src/game/snake.ts#L46-L49))。
+進む向きには `dir` と `lastMovedDir` の 2 つがあります ([src/game/snake.ts:49-52](src/game/snake.ts#L49-L52))。
 
 - `dir`: 次に進む向き。入力で変わる。
 - `lastMovedDir`: 最後に実際に進んだ向き。
 
-真逆への入力を無視する判定は `lastMovedDir` で行います ([src/game/snake.ts:75-79](src/game/snake.ts#L75-L79))。
+真逆への入力を無視する判定は `lastMovedDir` で行います ([src/game/snake.ts:79-84](src/game/snake.ts#L79-L84))。
 `dir` で判定すると、上に進んでいるときに「左 → 下」とすばやく押したとき、「左」で `dir` が左になり、「下」は左の真逆ではないので通ってしまい、次の移動で自分の首にぶつかります。
 
 ### 10.5 乱数を差し替えられるようにする
@@ -1570,6 +1646,33 @@ export const randomPicker: Picker = (candidates) =>
 
 **ルールの違いを「設定の違い」として表せないか** をまず考えると、コードの重複が減ります。
 
+### 10.7 演出のための状態
+
+`game/` のクラスには、ルールには使わず、画面の演出のためだけに持っている値が 2 つあります。
+
+| 値 | 場所 | 使いみち |
+|---|---|---|
+| `Field.eaten` | [src/game/field.ts:36](src/game/field.ts#L36) | 直前のティックに取ったアイテム。一人モードで取った数を数える |
+| `Snake.eatPulses` | [src/game/snake.ts:62-63](src/game/snake.ts#L62-L63) | リンゴを取った場所の体を膨らませる。取ってから進んだ回数を並べる |
+
+`eatPulses` の動きを見てみます。
+
+出典: [src/game/snake.ts:133-135](src/game/snake.ts#L133-L135), [src/game/field.ts:139-145](src/game/field.ts#L139-L145) (抜粋)
+
+```ts
+// Snake.advance: 進むたびに、取ってからの回数を 1 増やし、3 回進んだものは消す
+this.eatPulses = this.eatPulses.map((n) => n + 1).filter((n) => n < EAT_PULSE_MOVES);
+this.body.unshift(next);
+
+// Field.updateSnake: リンゴ (名前が _apple で終わるもの) を取ったら 0 を足す
+if (item.kind.endsWith("_apple")) snake.eatPulses.push(0);
+```
+
+- リンゴを取った瞬間、そのマスは頭 (`body[0]`) です。1 回進むと首 (`body[1]`)、2 回進むと `body[2]` と、取ったマスにあたる体の位置は 1 つずつ後ろにずれます。
+- つまり「取ってから進んだ回数」がそのまま「体の何番目か」になるので、数を 1 つ持つだけで、膨らませる体の位置が分かります。描く側は `eatPulses.includes(i)` で i 番目を膨らませるか決めます ([12.3 節](#123-drawfield-canvas-への描き方))。
+- 学習側 (Rust) にはこの値がありません。ルールと観測に関わらない値なので、[../CLAUDE.md](../CLAUDE.md) の「両方を揃える」の対象外です。
+  ルールに関わる値と演出のための値を混ぜるときは、コメントに「ゲームの進行には使わない」と書いて区別しておくと、あとで読む人が迷いません。
+
 ---
 
 ## 11. ゲームループ: requestAnimationFrame と固定ティック
@@ -1592,7 +1695,7 @@ export const randomPicker: Picker = (candidates) =>
 
 このアプリのループは、「前のフレームからの経過時間をためておき、0.1 秒分たまるごとに 1 ティック進める」という形です。
 
-出典: [src/components/GameScreen.tsx:104-137](src/components/GameScreen.tsx#L104-L137)
+出典: [src/components/GameScreen.tsx:131-164](src/components/GameScreen.tsx#L131-L164)
 
 ```tsx
 // ゲームループ: 経過時間に応じて決まった間隔でティックを進める
@@ -1647,7 +1750,7 @@ useEffect(() => {
 そこで、`version` という数字の state を用意し、ティックが進むたびに 1 増やしています。
 
 ```tsx
-const [version, setVersion] = useState(0);   // src/components/GameScreen.tsx:63
+const [version, setVersion] = useState(0);   // src/components/GameScreen.tsx:73
 ```
 
 - `setVersion(v => v + 1)` を呼ぶと `GameScreen` が描き直され、`envRef.current` の最新の状態が画面に出ます。
@@ -1656,7 +1759,7 @@ const [version, setVersion] = useState(0);   // src/components/GameScreen.tsx:63
 
 ### 11.4 1 ティックの中身
 
-出典: [src/components/GameScreen.tsx:90-102](src/components/GameScreen.tsx#L90-L102)
+出典: [src/components/GameScreen.tsx:113-129](src/components/GameScreen.tsx#L113-L129)
 
 ```tsx
 const tick = useCallback(() => {
@@ -1669,15 +1772,20 @@ const tick = useCallback(() => {
       inputs[player].push(decision.action);
     }
   });
-  if (!ais[0]) inputs[0] = inputsRef.current.splice(0);
+  if (!ais[0]) {
+    inputs[0] = inputsRef.current.splice(0);
+    // 補助の対象になる衝突を選んでしまったときは、AI の判断を採用する (AI も衝突を選べばそのまま衝突する)
+    if (collisionAhead(env, 0, inputs[0], assist)) inputs[0] = [assistAi.decide(env, 0).action];
+  }
   env.step(inputs);
-}, [ais]);
+}, [ais, assist, assistAi]);
 ```
 
 - `ais` は `[null, AiPlayer]` (あなた vs AI) か `[AiPlayer, AiPlayer]` (観戦) です。`null` のところは人が操作します。
 - AI は、次のティックで動くときだけ推論します。推論は重めなので、毎ティックはしません。
 - 判断の結果 (Q 値) は `decisionsRef` に残し、`PlayerPanel` で表示します。
 - 人の入力は、キーのハンドラーが `inputsRef` にためておいたものを `splice(0)` で全部取り出して渡します。
+- 渡す前に、難易度に応じた補助をします。その入力で次に移動すると衝突するなら、補助用の AI (`assistAi`) に行動を聞いて、人の入力をそれに差し替えます ([14.6 節](#146-難易度-人の操作を補助する))。
 
 ### 11.5 状態の移り変わり
 
@@ -1685,16 +1793,19 @@ const tick = useCallback(() => {
 
 ```
             Enter / タップ / 開始ボタン
+            (無操作で観戦に切り替わったときは自動)
   ready ─────────────────────────────▶ running ◀──────┐
-                                       │    ▲          │ P / Esc / 再開ボタン
-                           P / Esc     │    │          │
+                                       │    ▲          │ P / 再開ボタン
+                               P       │    │          │
                         (ルール画面も)  ▼    │          │
                                       paused ─────────┘
                                        
   running ── 勝敗がつく ──▶ over ── Enter / タップ / もう一度 (観戦なら 1.5 秒後に自動) ──▶ running
+
+  どの状態でも ── チートコード WIN FORCE ──▶ over
 ```
 
-`type Status = "ready" | "running" | "paused" | "over";` ([src/components/GameScreen.tsx:14](src/components/GameScreen.tsx#L14)) のように、状態を union 型の 1 つの値で持つのがコツです。
+`type Status = "ready" | "running" | "paused" | "over";` ([src/components/GameScreen.tsx:17](src/components/GameScreen.tsx#L17)) のように、状態を union 型の 1 つの値で持つのがコツです。
 `isRunning`・`isPaused`・`isOver` と真偽値を 3 つ持つと、「走っていて、かつ終わっている」のようなありえない組み合わせが作れてしまいます。
 
 ---
@@ -1758,10 +1869,10 @@ export function Board({ field, rules, palette, version, cellSize, fill = false }
    スマホや Retina の画面では、CSS の 1 ピクセルが実際の画素 2〜3 個にあたります。Canvas の `width`/`height` (画素数) を CSS の大きさと同じにすると、引き伸ばされてぼやけます。
    そこで、画素数を `scale` 倍にし、`setTransform(scale, ...)` で座標も `scale` 倍にしています。描く側 (`drawField`) は CSS ピクセルのつもりで描けば済みます。
 3. **携帯版は幅いっぱいに広げる (`fill`)**
-   CSS で幅を 100% にし ([src/styles.css:330-334](src/styles.css#L330-L334))、`ResizeObserver` で実際の幅を測って、1 マスの大きさを決めています ([src/components/Board.tsx:38-44](src/components/Board.tsx#L38-L44))。画面を回転させたときも測り直されます。
+   CSS で幅を 100% にし ([src/styles.css:406-410](src/styles.css#L406-L410))、`ResizeObserver` で実際の幅を測って、1 マスの大きさを決めています ([src/components/Board.tsx:38-44](src/components/Board.tsx#L38-L44))。画面を回転させたときも測り直されます。
 4. **画像が読み込み終わったら描き直す (`imagesLoaded`)**
    画像はすぐには届かないので、届くまではアイテムを描かずに進めます。届いたら `imagesLoaded` を `true` にして描き直します ([src/components/Board.tsx:30-36](src/components/Board.tsx#L30-L36))。
-   `active` という変数で、部品が消えたあとに state を更新しないようにしているのは、[2.4 節](#24-読み込みの競合を防ぐ) の `cancelled` と同じ考え方です。
+   `active` という変数で、部品が消えたあとに state を更新しないようにしているのは、[2.4 節](#24-モデルを最初に全部読む) の `cancelled` と同じ考え方です。
 
 ### 12.3 drawField: Canvas への描き方
 
@@ -1797,10 +1908,31 @@ export function drawField(ctx, field, rules, cell, palette): void {
 |---|---|
 | `ctx.fillStyle = "#色"` / `ctx.fillRect(x, y, w, h)` | 塗りの色を決める / 四角を塗る |
 | `ctx.strokeStyle`, `ctx.lineWidth` / `beginPath` `moveTo` `lineTo` `stroke` | 線の色と太さ / 線を引く ([src/components/draw.ts:89-94](src/components/draw.ts#L89-L94)) |
-| `ctx.arc(cx, cy, r, 0, Math.PI * 2)` / `ctx.fill()` | 円 (ヘビの目) ([src/components/draw.ts:129-131](src/components/draw.ts#L129-L131)) |
+| `ctx.arc(cx, cy, r, 0, Math.PI * 2)` / `ctx.fill()` | 円 (ヘビの目) ([src/components/draw.ts:135-137](src/components/draw.ts#L135-L137)) |
 | `ctx.drawImage(img, x, y, w, h)` | 画像を描く ([src/components/draw.ts:100](src/components/draw.ts#L100)) |
-| `ctx.globalAlpha = 0.5` | 以降の描画の透明度 (尻尾に向かって薄くする) ([src/components/draw.ts:115](src/components/draw.ts#L115)) |
+| `ctx.globalAlpha = 0.5` | 以降の描画の透明度 (尻尾に向かって薄くする) ([src/components/draw.ts:118](src/components/draw.ts#L118)) |
 | `ctx.setTransform(...)` | 座標の拡大・移動 |
+
+ヘビの体は、マスより少し小さい正方形で描いています。リンゴを取った場所の体だけは、マスの中心を基準に 1.1 倍に広げます ([10.7 節](#107-演出のための状態))。
+
+出典: [src/components/draw.ts:110-124](src/components/draw.ts#L110-L124) (抜粋)
+
+```ts
+/** 林檎を食べた場所の体を膨らませる倍率 */
+const EAT_PULSE_SCALE = 1.1;
+
+for (let i = len - 1; i >= 1; i--) {
+  const p = snake.body[i];
+  // ...
+  const scale = snake.eatPulses.includes(i) ? EAT_PULSE_SCALE : 1;
+  const size = (cell - 4) * scale;
+  ctx.fillRect(p.x * cell + (cell - size) / 2, p.y * cell + (cell - size) / 2, size, size);
+}
+```
+
+- 左上の位置を `(cell - size) / 2` だけずらすと、大きさを変えても正方形の中心がマスの中心に来ます。`size` が `cell` より大きくなると、はみ出した分は隣のマスに少しかかります。
+- 頭も同じ計算で、`eatPulses.includes(0)` のときに膨らませます ([src/components/draw.ts:128-129](src/components/draw.ts#L128-L129))。
+- 体は尻尾から頭に向かって描いているので、膨らんだ体の上に、1 つ頭側の体が重なります。Canvas は描いた順に上に重なるからです。
 
 ### 12.4 画像の読み込みを 1 回にまとめる
 
@@ -1844,7 +1976,7 @@ const range = Math.max(...q) - min || 1;
 
 - 一番小さい Q 値を 8%、一番大きい Q 値を 100% の幅にしています。
 - `|| 1` は、全部の Q 値が同じで `range` が 0 のときに 0 で割らないためです。
-- 選んだ行動の行には `chosen` クラスを付けて、CSS で色を変えています ([src/styles.css:167-183](src/styles.css#L167-L183))。
+- 選んだ行動の行には `chosen` クラスを付けて、CSS で色を変えています ([src/styles.css:225-241](src/styles.css#L225-L241))。
 
 小さなグラフなら、ライブラリを入れなくても DOM と CSS で十分描けます。
 
@@ -1854,7 +1986,7 @@ const range = Math.max(...q) - min || 1;
 
 ### 13.1 キーボード
 
-出典: [src/components/GameScreen.tsx:145-167](src/components/GameScreen.tsx#L145-L167)
+出典: [src/components/GameScreen.tsx:172-194](src/components/GameScreen.tsx#L172-L194)
 
 ```tsx
 useEffect(() => {
@@ -1867,7 +1999,7 @@ useEffect(() => {
       if (current !== "running") start();
       return;
     }
-    if (e.code === "KeyP" || e.code === "Escape") {
+    if (e.code === "KeyP") {
       if (current === "running") setStatus("paused");
       else if (current === "paused") setStatus("running");
       return;
@@ -1891,17 +2023,18 @@ useEffect(() => {
 | `e.repeat` | キーを押しっぱなしにしたときの連続入力を無視する |
 | `inputsRef.current.push(action)` | すぐにゲームを動かさず、次のティックまでためておく ([11.4 節](#114-1-ティックの中身)) |
 
-キーと行動の対応は、表 (`KEY_ACTIONS`) にしておくと、キーを増やすのも一人モードで使い回すのも簡単です ([src/components/GameScreen.tsx:16-29](src/components/GameScreen.tsx#L16-L29)、[src/components/SoloScreen.tsx:134](src/components/SoloScreen.tsx#L134))。
+キーと行動の対応は、表 (`KEY_ACTIONS`) にしておくと、キーを増やすのも一人モードで使い回すのも簡単です ([src/components/GameScreen.tsx:19-30](src/components/GameScreen.tsx#L19-L30)、[src/components/SoloScreen.tsx:134](src/components/SoloScreen.tsx#L134))。
+今の割り当ては、移動が矢印キーと WASD、ブーストがスペース、アイテム使用が E です。開始の Enter と一時停止の P は行動ではないので、表に入れずにハンドラーの中で見ています。
 
 **フォーカスの問題**にも気をつけています。セレクトやボタンをクリックすると、その要素にフォーカスが残ります。そのまま矢印キーを押すと、ゲームではなくセレクトの値が変わってしまいます。
-そこで、試合を始めるときにフォーカスを外しています ([src/components/GameScreen.tsx:84-85](src/components/GameScreen.tsx#L84-L85))。
+そこで、試合を始めるときにフォーカスを外しています ([src/components/GameScreen.tsx:101-102](src/components/GameScreen.tsx#L101-L102))。
 
 ```tsx
 // 設定欄などにフォーカスが残っていると矢印キーやスペースを奪われるので外す
 (document.activeElement as HTMLElement | null)?.blur?.();
 ```
 
-一人モードの制限時間のスライダーでも、マウスを離したときにフォーカスを外しています ([src/App.tsx:181-182](src/App.tsx#L181-L182))。
+設定欄のボタン ([src/App.tsx:49-53](src/App.tsx#L49-L53)) と一人モードの制限時間のスライダー ([src/App.tsx:249-250](src/App.tsx#L249-L250)) でも、操作したあとにフォーカスを外しています。
 
 ### 13.2 タッチ: Pointer Events
 
@@ -1963,7 +2096,7 @@ React とつなぐ `useGestures` ([9.5 節](#95-自作のフック)) には、�
 
 CSS 側でも、ブラウザがタッチを横取りしないようにしています。
 
-出典: [src/styles.css:320-328](src/styles.css#L320-L328)
+出典: [src/styles.css:396-404](src/styles.css#L396-L404)
 
 ```css
 .stage {
@@ -1981,7 +2114,7 @@ CSS 側でも、ブラウザがタッチを横取りしないようにしてい�
 
 ### 13.3 パソコン版と携帯版をどう決めるか
 
-出典: [src/App.tsx:31-40](src/App.tsx#L31-L40)
+出典: [src/App.tsx:79-88](src/App.tsx#L79-L88)
 
 ```ts
 /** 前に選んだ表示があればそれを、無ければ指で操作する端末かどうかで決める */
@@ -1999,6 +2132,84 @@ function initialLayout(): Layout {
 - `matchMedia("(pointer: coarse)")` は、「主な入力が指のように粗いか」を CSS のメディアクエリで確かめます。画面の幅ではなく **操作方法** で決めているのがポイントです。大きなタブレットでも指で操作するなら携帯版になります。
 - 判定が外れることもあるので、画面の「表示」でいつでも切り替えられ、選んだものは localStorage に保存します ([15.1 節](#151-localstorage-ブラウザに少しだけ保存する))。
 
+### 13.4 文字の並びを見張る: チートコード
+
+動作確認のために、決まった文字を打つと動く隠しコマンド (チートコード) を用意しています ([src/cheats.ts](src/cheats.ts))。画面には何も出しません。
+
+| 入力 | 動き |
+|---|---|
+| `WIN FORCE` | 人が時間切れのスコア判定で AI に勝った結果にする (vs AI のときだけ)。英字は Shift を押しながら、スペースは Shift なしで打つ |
+| `vsai` | 「あなた vs AI」のモードに切り替える |
+| `aiai` | 観戦モードに切り替える |
+
+コマンドは名前と動きの組の一覧で、動きは画面から渡された操作 (`CheatContext`) を呼ぶだけです。
+
+出典: [src/cheats.ts:9-31](src/cheats.ts#L9-L31) (抜粋)
+
+```ts
+export interface CheatContext {
+  forceWin?: () => void;
+  vsAi?: () => void;
+  aiVsAi?: () => void;
+}
+
+export const CHEAT_COMMANDS: readonly CheatCommand[] = [
+  { name: "WIN FORCE", run: (ctx) => ctx.forceWin?.() },
+  { name: "vsai", run: (ctx) => ctx.vsAi?.() },
+  { name: "aiai", run: (ctx) => ctx.aiVsAi?.() },
+];
+```
+
+- その画面で使えない操作は渡しません (`undefined`)。`?.()` は「関数があれば呼ぶ」書き方なので、使えない画面では何も起きません。たとえば観戦中は `forceWin` を渡さず、すでに観戦中なら `aiVsAi` も渡しません ([src/components/GameScreen.tsx:233-240](src/components/GameScreen.tsx#L233-L240))。
+- モードの切り替えは `App` の state なので、`GameScreen` は `App` から受け取った `onModeChange` を呼ぶだけです ([8.6 節](#86-key-で部品を作り直す))。
+
+**1 文字ずつ照合する**
+
+打った文字はためておき、どのコマンドの頭にも合わなくなったら捨てます。
+
+出典: [src/cheats.ts:37-47](src/cheats.ts#L37-L47)
+
+```ts
+export function advanceCheatBuffer(buffer, key, names) {
+  const isPrefix = (text: string) => names.some((n) => n.startsWith(text));
+  let next = buffer + key;
+  if (!isPrefix(next)) next = isPrefix(key) ? key : "";
+  const matched = names.find((n) => n === next) ?? null;
+  return { buffer: matched ? "" : next, matched };
+}
+```
+
+- `vsai` を打つ途中で `vx` と打ち間違えたら、たまった文字を捨てます。そのとき、打ち間違えた 1 文字がコマンドの頭になっていれば (`isPrefix(key)`)、そこから数え直します。`wWIN FORCE` のように余計な文字が前に付いても一致するのはこのためです。
+- 照合だけを React を使わない関数に分けているので、キーボードを使わずにテストできます ([src/cheats.test.ts](src/cheats.test.ts))。[5.2 節](#52-依存の向きを一方向にする) の「計算するコード」と「画面に出すコード」を分ける考え方です。
+
+**`e.code` ではなく `e.key` を使う**
+
+キー入力を見張る `useCheatCodes` ([src/cheats.ts:52-85](src/cheats.ts#L52-L85)) は、ゲームの操作 ([13.1 節](#131-キーボード)) と違い `e.key` を使っています。
+
+| | `e.code` | `e.key` |
+|---|---|---|
+| 表すもの | キーボード上の物理的な位置 (`"KeyW"`) | そのキーで入力された文字 (`"w"`、Shift 付きなら `"W"`) |
+| 向いている使いみち | ゲームの操作。配列や日本語入力に左右されたくない | 文字の入力。大文字と小文字を区別したい |
+
+`WIN FORCE` の英字は大文字なので、Shift を押しながら打たないと一致しません。スペースは Shift を押すと `e.key` が同じ `" "` のままなので、`e.shiftKey` を見て、Shift 付きのスペースは打ち間違いとして捨てています。
+
+ほかにも、次のように誤動作を防いでいます。
+
+- Ctrl・Alt・Meta を押しているときと、`e.key` が 1 文字でないキー (`"Enter"`、`"Shift"` など) は無視する。Shift だけを押した瞬間の keydown で、ためた文字が消えないようにするためでもある
+- 3 秒 (`IDLE_RESET_MS`) 打たなければ、ためた文字を捨てる
+- コマンドの途中のスペースでページがスクロールしないよう、`preventDefault` する
+- ルール画面を開いている間 (`active` が `false`) は見張らない
+
+チートコードの文字は、ゲームの操作のキーとしても届きます。試合中に `aiai` と打つと、`a` は左への移動にもなります。動作確認用なので、この重なりはそのままにしています。
+
+**チートで作った結果を区別する**
+
+`WIN FORCE` は、試合の途中でも終わったあとでも、結果を「人の勝ち」に差し替えます ([src/components/GameScreen.tsx:213-232](src/components/GameScreen.tsx#L213-L232))。
+
+- 結果の見出しに小さく `c` を付けます。動作確認で作った結果だと見て分かるようにするためです。
+- 勝敗の数 (`tally`) には入れません。試合が終わったあとに使ったときは、すでに数えた結果を取り消してから差し替えます。2 回続けて使っても二重に取り消さないよう、`cheatedRef` で「もうチートの結果か」を見ています。
+- 紙吹雪 (むずかしいで勝ったときの演出) も、本物の勝ちと同じように出ます。演出の確認にも使えます。
+
 ---
 
 ## 14. AI: モデルの読み込みと推論
@@ -2010,7 +2221,7 @@ function initialLayout(): Layout {
                               │
  GameEnv ──encodeObservation──▶ grid (9×16×16) と vector (13) ──predict──▶ Q 値 (6)
                                                                             │
-                                                         最大の行動を選ぶ (難易度に応じてランダム)
+                                                                 最大の行動を選ぶ
                                                                             │
                                                                             ▼
                                                                "up" / "boost" / ...
@@ -2024,6 +2235,7 @@ function initialLayout(): Layout {
 | 盤面を数値にする (観測) | [src/ai/observation.ts:61-105](src/ai/observation.ts#L61-L105) |
 | 順伝播 (推論) | [src/ai/model.ts:136-158](src/ai/model.ts#L136-L158) |
 | 行動を選ぶ | [src/ai/agent.ts:34-47](src/ai/agent.ts#L34-L47) |
+| 難易度に応じて人を補助する | [src/ai/assist.ts](src/ai/assist.ts) |
 
 ### 14.2 読み込みと確認
 
@@ -2034,7 +2246,7 @@ function initialLayout(): Layout {
 3. 各層の重みの要素数が、層の大きさから計算した数と一致するか確かめる (`expectLength`)。
 4. 重みを `number[]` から `Float32Array` に変換する。
 
-さらに App は、読み込んだモデルが **この Web 版の観測の作り方と合っているか** を確かめています ([src/App.tsx:50-53](src/App.tsx#L50-L53) の `loaded` → [src/ai/agent.ts:15-17](src/ai/agent.ts#L15-L17))。
+さらに App は、読み込んだモデルが **この Web 版の観測の作り方と合っているか** を確かめています ([src/App.tsx:98-101](src/App.tsx#L98-L101) の `loaded` → [src/ai/agent.ts:15-17](src/ai/agent.ts#L15-L17))。
 モデルの JSON に入っているチャネル名の並びが、Web 版の `GRID_CHANNEL_NAMES` と一致しなければエラーにします。
 学習側で観測の仕様を変えたのに Web 側を直し忘れると、AI はでたらめに動きます。黙っておかしく動くより、読み込み時にはっきり失敗するほうが原因を見つけやすくなります。
 
@@ -2137,7 +2349,7 @@ function linear(layer: Dense, input: Float32Array, relu: boolean): Float32Array 
 盤面の外 (パディング) は 0 とみなすので、盤面の外にはみ出す範囲を最初に計算して、ループの範囲から外しています (`oyStart`〜`oyEnd`)。こうすると、ループの中で「盤面の中か」を毎回確かめずに済み、速くなります。
 計算式は [../learn/RULES.md の 11 章](../learn/RULES.md) に書いてあり、Rust 側の学習ライブラリの計算と同じ結果になります。
 
-### 14.5 行動を選ぶ: Q 値と難易度
+### 14.5 行動を選ぶ: Q 値
 
 出典: [src/ai/agent.ts:34-47](src/ai/agent.ts#L34-L47)
 
@@ -2159,10 +2371,48 @@ decide(env: GameEnv, player: number): Decision {
 ```
 
 - Q 値は「その行動をとったら、この先どれくらい得をするか」の見積もりです。一番大きいものを選べば、AI にとって最善の手です。
-- 難易度は、一定の確率でわざとランダムな行動をとらせることで作っています (かんたん 60%・ふつう 30%・むずかしい 0%)。確率はモデル JSON の `difficulty` に入っています。
-- ランダムな行動のときも Q 値は計算しておき、画面の表に出します。「AI は本当はこうしたかった」が見えます。
+- `randomActionRate` の確率で、わざとランダムな行動をとらせることもできます。ランダムな行動のときも Q 値は計算しておき、画面の表に出せば「AI は本当はこうしたかった」が見えます。
+- ただし今の Web 版はこの確率をいつも 0 にしていて、AI はいつも最善の手を選びます。モデル JSON の `difficulty` にも `random_action_rate` が入っていますが、Web 版は難易度の名前 (`easy`・`medium`・`hard`) だけを使います。難易度の作り方は次の節で見ます。
 
-### 14.6 推論はどこで動いているか
+### 14.6 難易度: 人の操作を補助する
+
+AI をわざと弱くすると、相手が急におかしな動きをするので、遊ぶ人には「手を抜かれている」のが分かってしまいます。
+そこでこのアプリでは、AI はいつも本気のままにして、**人がうっかりぶつかりそうなときに AI が操作を肩代わりする** ことで難易度を下げています。
+
+| 難易度 | 補助する衝突 (`AssistLevel`) |
+|---|---|
+| かんたん | 外周の壁・お邪魔ブロック・自分の体 (`"all"`) |
+| ふつう | 外周の壁だけ (`"wall"`) |
+| むずかしい | なし (`"none"`) |
+
+出典: [src/ai/assist.ts:33-41](src/ai/assist.ts#L33-L41)
+
+```ts
+/** `actions` を入力したとき、次の移動が補助の対象になる衝突になるか */
+export function collisionAhead(env: GameEnv, player: number, actions: readonly Action[], level: AssistLevel): boolean {
+  if (level === "none" || !env.needsDecision(player)) return false;
+  const field = env.fields[player];
+  const next = stepPosition(field.snake.head, directionAfter(env, player, actions));
+  if (!Field.inBounds(next, env.rules)) return true;
+  if (level === "wall") return false;
+  return field.hasObstacle(next) || field.snake.collidesWithSelf(next);
+}
+```
+
+- 調べるのは、ヘビが次のティックで動くとき (`needsDecision`) だけです。動かないティックの入力は向きを変えるだけなので、ぶつかりようがありません。
+- `directionAfter` は、このティックの入力をすべて反映したあとの向きを、ゲームの状態を変えずに計算します ([src/ai/assist.ts:15-25](src/ai/assist.ts#L15-L25))。真逆への入力を無視するところまで `Snake.turn` と同じにしてあります。前のティックまでに押した向きは `snake.dir` に入っているので、そこから始めます。
+- 衝突の判定には、ゲーム本体と同じ `Field.inBounds`・`hasObstacle`・`collidesWithSelf` を使います。判定を書き直さないので、ルールとずれません。
+
+衝突するなら、補助用の `AiPlayer` に人のヘビの側から盤面を見せて行動を聞き、人の入力をその 1 つに差し替えます ([11.4 節](#114-1-ティックの中身))。
+
+- 差し替えるのはこのティックの入力だけです。人がぶつからない操作をしている間は、何も変わりません。
+- AI の答えもそのまま使います。AI も衝突する手を選んだら (どの向きもふさがっているときなど)、そのまま衝突して負けます。向きを変えない行動 (ブーストなど) を選んだときも、今の向きのまま進むので衝突します。
+- 差し替えると、このティックに押したブーストやアイテム使用も AI の 1 手に置き換わります。
+
+この判定は人の入力を `GameEnv.step` に渡す **前** の処理で、ゲームのルール (`src/game/`) には手を入れていません。学習側 (Rust) にも同じ処理は要りません。
+補助の範囲ごとの判定は [src/ai/assist.test.ts](src/ai/assist.test.ts) で確かめています。
+
+### 14.7 推論はどこで動いているか
 
 推論は、ゲームループの `tick` の中 ([11.4 節](#114-1-ティックの中身)) で、**画面を描くのと同じスレッド (メインスレッド)** で動いています。
 
@@ -2179,7 +2429,7 @@ Performance タブで記録すると、1 フレームの中で `predict` にど�
 
 ### 15.1 localStorage: ブラウザに少しだけ保存する
 
-出典: [src/App.tsx:77-84](src/App.tsx#L77-L84)
+出典: [src/App.tsx:152-159](src/App.tsx#L152-L159)
 
 ```ts
 const changeLayout = (next: Layout) => {
@@ -2196,14 +2446,14 @@ const changeLayout = (next: Layout) => {
 - 保存先は **そのブラウザの、そのサイト (オリジン) だけ** です。別のブラウザや別の端末には届きません。サーバーにも送られません。
 - 容量は 5MB 程度です。設定などの小さな値に向いています。
 - プライベートブラウズや、サイトデータを禁止した設定では、読み書きで例外が出ることがあります。必ず `try/catch` で囲み、保存できなくても動くようにします。
-- キーは `"duelsnake.layout"` のようにアプリ名を前に付けます ([src/App.tsx:23](src/App.tsx#L23))。同じドメイン (`24-fuji.github.io`) の他のアプリとぶつからないようにするためです。
+- キーは `"duelsnake.layout"` のようにアプリ名を前に付けます ([src/App.tsx:71](src/App.tsx#L71))。同じドメイン (`24-fuji.github.io`) の他のアプリとぶつからないようにするためです。
 
 ### 15.2 History API: 戻る操作でルール画面を閉じる
 
 ルール画面は、URL を変えずに画面を切り替えています。そのままだと、スマホで「戻る」操作 (iPhone の横スワイプなど) をすると、ルール画面ではなくアプリそのものから離れてしまいます。
 そこで、History API を使って「戻る」でルール画面を閉じられるようにしています。
 
-出典: [src/App.tsx:86-119](src/App.tsx#L86-L119) (抜粋)
+出典: [src/App.tsx:161-194](src/App.tsx#L161-L194) (抜粋)
 
 ```ts
 useEffect(() => {
@@ -2279,7 +2529,7 @@ CSS Modules や Tailwind CSS などの仕組みは使っていません。この
 
 **Grid** (`display: grid`) は、表のように行と列で並べるときに使います。
 
-出典: [src/styles.css:127-133](src/styles.css#L127-L133)
+出典: [src/styles.css:159-164](src/styles.css#L159-L164) (抜粋)
 
 ```css
 .panel dl {
@@ -2291,7 +2541,7 @@ CSS Modules や Tailwind CSS などの仕組みは使っていません。この
 
 **重ねる** (`position: absolute`) は、盤面の上に「Enter キーで開始」を重ねるのに使います。
 
-出典: [src/styles.css:86-98](src/styles.css#L86-L98)
+出典: [src/styles.css:118-130](src/styles.css#L118-L130) (抜粋)
 
 ```css
 .overlay {
@@ -2312,26 +2562,26 @@ CSS Modules や Tailwind CSS などの仕組みは使っていません。この
 レイアウトの切り替えは、CSS のメディアクエリ (`@media (max-width: ...)`) ではなく、**一番外側の要素のクラス** で行っています。
 
 ```tsx
-<div className={`app ${layout}`}>   {/* src/App.tsx:145。"app pc" か "app mobile" */}
+<div className={`app ${layout}`}>   {/* src/App.tsx:224。"app pc" か "app mobile" */}
 ```
 
 ```css
-.app.mobile { padding: 12px; }            /* src/styles.css:264 */
-.game.mobile { max-width: 75vh; }         /* src/styles.css:278-282。横向きでも盤面が画面の高さに収まる */
+.app.mobile { padding: 12px; }            /* src/styles.css:335-337 */
+.game.mobile { max-width: 75vh; }         /* src/styles.css:349-353。横向きでも盤面が画面の高さに収まる */
 ```
 
 利用者が「表示」で選べるようにしたので、画面の幅ではなく state で決めています。
-また、携帯版とパソコン版では並べ方 (ワイプに相手を小さく映すかどうか) も違うので、CSS だけでなく JSX も分けています ([src/components/GameScreen.tsx:215-273](src/components/GameScreen.tsx#L215-L273))。
+また、携帯版とパソコン版では並べ方 (ワイプに相手を小さく映すかどうか) も違うので、CSS だけでなく JSX も分けています ([src/components/GameScreen.tsx:299-361](src/components/GameScreen.tsx#L299-L361))。
 
 ### 16.3 細かい工夫
 
 | 書き方 | 場所 | 効果 |
 |---|---|---|
 | `color-scheme: dark` | [src/styles.css:2](src/styles.css#L2) | セレクトやスクロールバーなど、ブラウザが描く部品も暗い色にする |
-| `font-variant-numeric: tabular-nums` | [src/styles.css:60](src/styles.css#L60) | 数字の幅を揃え、残り時間が変わっても文字がガタガタ動かない |
-| `min-width: 5.5em` | [src/styles.css:371](src/styles.css#L371) | 制限時間の表示の長さが変わっても、隣の設定欄がずれない |
+| `font-variant-numeric: tabular-nums` | [src/styles.css:92](src/styles.css#L92) | 数字の幅を揃え、残り時間が変わっても文字がガタガタ動かない |
+| `min-width: 5.5em` | [src/styles.css:468](src/styles.css#L468) | 制限時間の表示の長さが変わっても、隣の設定欄がずれない |
 | `aspect-ratio` | [src/components/Board.tsx:65](src/components/Board.tsx#L65) | 幅に合わせて、盤面の縦横比のまま高さを決める |
-| `vh` | [src/styles.css:280](src/styles.css#L280) | 画面の高さに対する割合 (75vh = 高さの 75%) |
+| `vh` | [src/styles.css:351](src/styles.css#L351) | 画面の高さに対する割合 (75vh = 高さの 75%) |
 
 ---
 
@@ -2344,6 +2594,8 @@ CSS Modules や Tailwind CSS などの仕組みは使っていません。この
 | [src/game/game.test.ts](src/game/game.test.ts) | 対戦のルール (移動・衝突・アイテム・ブースト・お邪魔・勝敗)。Rust の [../learn/src/env/tests.rs](../learn/src/env/tests.rs) と同じ内容 |
 | [src/game/solo.test.ts](src/game/solo.test.ts) | 一人モードのルール |
 | [src/ai/agent.test.ts](src/ai/agent.test.ts) | 同梱モデルの一覧、各モデルが Web 版と合うか、AI どうしで最後まで対戦できるか |
+| [src/ai/assist.test.ts](src/ai/assist.test.ts) | 難易度ごとの補助の範囲 (壁・お邪魔ブロック・自分の体のどれを補助するか) |
+| [src/cheats.test.ts](src/cheats.test.ts) | チートコードの文字の照合 (打ち間違えても打ち直せば一致するか、大文字と小文字を区別するか) |
 | [src/components/gestures.test.ts](src/components/gestures.test.ts) | スワイプ・長押し・タップ・ダブルタップの見分け |
 
 テストしているのは、[5.2 節](#52-依存の向きを一方向にする) で分けた「計算するコード」だけです。
@@ -2555,8 +2807,8 @@ deploy ジョブの最初のステップ ([../.github/workflows/deploy-web.yml:5
 
 例: 「盤面の線を消す」チェックボックスを足す。
 
-1. `App` に state を足す: `const [showGrid, setShowGrid] = useState(true);` ([src/App.tsx:64-73](src/App.tsx#L64-L73) の並び)
-2. 設定欄に入力を足す ([src/App.tsx:216-224](src/App.tsx#L216-L224) のチェックボックスをまねる)
+1. `App` に state を足す: `const [showGrid, setShowGrid] = useState(true);` ([src/App.tsx:113-130](src/App.tsx#L113-L130) の並び)
+2. 設定欄に入力を足す ([src/App.tsx:274-282](src/App.tsx#L274-L282) のチェックボックスをまねる。選択肢から選ぶ設定なら `Segmented` を使う)
 3. `GameScreen` と `SoloScreen` の `Props` に `showGrid: boolean` を足し、`Board` に渡す
 4. `Board` から `drawField` に渡し、`drawField` の線を引く部分を `if (showGrid)` で囲む
 5. `Board` の描画の `useEffect` の依存配列に `showGrid` を足す (忘れると、切り替えても描き直されない)
@@ -2593,7 +2845,28 @@ Web 側のコードは変えません。
 1. [src/assets/items/](src/assets/items/) の同じ名前の PNG を置き換える。背景を透過し、余白を削った正方形にする ([src/assets/README.md](src/assets/README.md))
 2. 新しい画像を足すなら、[src/components/draw.ts](src/components/draw.ts) で `import` し、`SPRITE_URLS` に足す
 
-### 19.5 変更したら確かめること
+### 19.5 チートコードを足す
+
+例: `lose` と打つと AI の勝ちにする。
+
+1. [src/cheats.ts](src/cheats.ts) の `CheatContext` に、画面が渡す操作 (`forceLose?: () => void;`) を足す
+2. `CHEAT_COMMANDS` に `{ name: "lose", run: (ctx) => ctx.forceLose?.() }` を足す。名前の大文字は Shift を押して打つ文字になる
+3. `GameScreen` で操作を作り、`useCheatCodes` に渡す。使えない状態では `undefined` を渡す ([13.4 節](#134-文字の並びを見張る-チートコード))
+4. 名前がほかのコマンドの頭と重なっていないか確かめる (`aiai` と `ai` のように片方がもう片方の頭だと、短いほうで先に一致してしまう)。照合のテストは [src/cheats.test.ts](src/cheats.test.ts) に足す
+5. [../README.md](../README.md) のチートコードの表に足す
+
+### 19.6 難易度の補助を変える
+
+例: ふつうでもお邪魔ブロックは補助する。
+
+1. [src/ai/assist.ts](src/ai/assist.ts) の `AssistLevel` に範囲を足すか、`assistLevel` の対応を変える
+2. `collisionAhead` に、その範囲で調べる衝突を足す
+3. [src/ai/assist.test.ts](src/ai/assist.test.ts) に、その範囲のテストを足す
+4. [../README.md](../README.md) と [../learn/RULES.md](../learn/RULES.md) の 10 章の難易度の説明を直す
+
+ゲームのルールそのものは変わらないので、学習側を直したり、モデルを学習し直したりする必要はありません。
+
+### 19.7 変更したら確かめること
 
 ```sh
 just web-test               # テスト
@@ -2771,7 +3044,7 @@ export function Game() {
 | 盤面がぼやける | Canvas の画素数が画面の画素数より少ない | `devicePixelRatio` 倍の大きさで描く ([12.2 節](#122-board-react-と-canvas-をつなぐ)) |
 | 時間の計算が 1 ティックずれる | `0.6 / 0.1 = 5.999...` のような小数の誤差 | `Math.round` で四捨五入する ([10.1 節](#101-秒ではなくティックで数える)) |
 | タブを戻したらゲームが一気に進んだ | 裏にいた間の経過時間をまとめて処理した | 1 フレームの経過時間に上限を付ける (`Math.min(now - last, 250)`) |
-| 盤面を切り替えたのに古い盤面に戻る | 読み込みの競合 | effect のクリーンアップで古い結果を捨てる ([2.4 節](#24-読み込みの競合を防ぐ)) |
+| 読み込みの途中で画面を閉じると警告が出る、古い結果で上書きされる | 消えた部品や古い effect の結果で state を更新している | effect のクリーンアップで `cancelled = true` にし、結果を捨てる ([2.4 節](#24-モデルを最初に全部読む)) |
 | 手元では動くのに、公開したら真っ白 | サブパスで公開され、`/assets/...` が見つからない | `base: './'` ([4.3 節](#43-viteconfigjs))。開発者ツールの Console と Network で 404 を探す |
 | 開発では動くのに `npm run build` が失敗する | Vite の開発サーバーは型を検査しない | こまめに `npm run build` か `npm run typecheck` を動かす |
 | プライベートブラウズでだけ落ちる | localStorage が例外を投げる | `try/catch` で囲む ([15.1 節](#151-localstorage-ブラウザに少しだけ保存する)) |
@@ -2786,17 +3059,19 @@ export function Game() {
 1. **色を変える**: 相手 (AI) のヘビの色を緑にしてください。
    ヒント: [src/components/draw.ts:20-23](src/components/draw.ts#L20-L23)
 2. **キーを足す**: テンキーの 8・2・4・6 でも上下左右に動けるようにしてください。
-   ヒント: `e.code` は `"Numpad8"` など。[src/components/GameScreen.tsx:16-29](src/components/GameScreen.tsx#L16-L29)
+   ヒント: `e.code` は `"Numpad8"` など。[src/components/GameScreen.tsx:19-30](src/components/GameScreen.tsx#L19-L30)
 3. **表示を足す**: 対戦画面の上部に、経過ティック数 (`env.tick`) を出してください。なぜ毎ティック表示が更新されるのか説明してください。
    ヒント: [11.3 節](#113-描き直しのきっかけ-version)
 4. **設定を保存する**: 難易度を localStorage に保存し、次に開いたときも同じ難易度で始まるようにしてください。
-   ヒント: [src/App.tsx:32-40](src/App.tsx#L32-L40) と [src/App.tsx:77-84](src/App.tsx#L77-L84)
+   ヒント: [src/App.tsx:80-88](src/App.tsx#L80-L88) と [src/App.tsx:152-159](src/App.tsx#L152-L159)
 5. **最高スコアを残す**: 一人モードの最高スコア ([src/components/SoloScreen.tsx:68](src/components/SoloScreen.tsx#L68)) は、画面を作り直すと消えます。盤面サイズごとに localStorage に残してください。
 6. **テストを読んで足す**: [src/game/game.test.ts:265](src/game/game.test.ts#L265) のブーストのテストを読み、何を確かめているか説明してください。そのうえで「クールダウン中にブーストを押しても発動しない」ことを確かめるテストを足してください。
 7. **ジェスチャーを足す**: 2 本指でタップしたら一時停止するようにしてください。`GestureRecognizer` に何を足し、テストをどう書くか考えてから実装してください。
 8. **推論の時間を測る**: `performance.now()` を使って、`AiPlayer.decide` 1 回にかかる時間をコンソールに出し、パソコンとスマホで比べてください。
-9. **Web Worker に移す** (発展): AI の推論を Web Worker に移してください。判断が届くまでの間、ゲームをどう進めるか (待つか、前の判断を使うか) を決める必要があります。
-10. **オンライン対戦を設計する** (発展): 人どうしがオンラインで対戦できるようにするには、何をどこで動かし、どう通信すればよいか、[3 章](#3-設計の選び方-どこで動かしどう通信するか) の観点で設計を書いてください。
+9. **補助を見せる**: かんたん・ふつうで AI が操作を肩代わりした回数を数え、対戦画面の上部に出してください。肩代わりした瞬間に盤面の枠を光らせるなど、遊ぶ人に分かる演出も考えてください。
+   ヒント: [11.4 節](#114-1-ティックの中身) の `tick` と [14.6 節](#146-難易度-人の操作を補助する)。回数は描き直しを起こさない ref に数え、`version` で描き直すときに読む
+10. **Web Worker に移す** (発展): AI の推論を Web Worker に移してください。判断が届くまでの間、ゲームをどう進めるか (待つか、前の判断を使うか) を決める必要があります。
+11. **オンライン対戦を設計する** (発展): 人どうしがオンラインで対戦できるようにするには、何をどこで動かし、どう通信すればよいか、[3 章](#3-設計の選び方-どこで動かしどう通信するか) の観点で設計を書いてください。
     考えること: ゲームの進行はどちらの端末 (またはサーバー) で行うか、入力の遅れをどう扱うか、不正をどう防ぐか。
 
 ---
@@ -2848,7 +3123,7 @@ export function Game() {
 | 観測 | AI に渡すために、盤面を数値の配列にしたもの | 14.3 |
 | 順伝播 | ニューラルネットに入力を通して出力を計算すること | 14.4 |
 | Q 値 | 「その行動をとったらこの先どれだけ得か」の見積もり | 14.5 |
-| メインスレッド / Web Worker | 描画と同じスレッド / 別のスレッドで JS を動かす仕組み | 14.6 |
+| メインスレッド / Web Worker | 描画と同じスレッド / 別のスレッドで JS を動かす仕組み | 14.7 |
 | localStorage | ブラウザにキーと文字列を保存する仕組み | 15.1 |
 | History API | ページを読み直さずに履歴を操作する仕組み | 15.2 |
 | Flexbox / Grid | CSS で要素を並べる 2 つの方法 | 16.1 |

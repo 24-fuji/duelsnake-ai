@@ -126,7 +126,7 @@ export function SoloScreen({ game, timeLimitSeconds, layout, active }: Props) {
         if (current !== "running") start();
         return;
       }
-      if (e.code === "KeyP" || e.code === "Escape") {
+      if (e.code === "KeyP") {
         if (current === "running") setStatus("paused");
         else if (current === "paused") setStatus("running");
         return;

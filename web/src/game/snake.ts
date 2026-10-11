@@ -38,6 +38,9 @@ export function manhattan(a: Position, b: Position): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
+/** 林檎を食べたあと、体を膨らませておく移動の回数 */
+export const EAT_PULSE_MOVES = 3;
+
 export type HeldItem = "block_clear" | "block_jam";
 
 export class Snake {
@@ -56,6 +59,8 @@ export class Snake {
   moveCooldown: number;
   boostRemaining = 0;
   boostCooldown = 0;
+  /** 林檎を食べた場所の体を膨らませる演出用。食べてから進んだ回数 (体の何番目に当たるかと同じ) を並べる。ゲームの進行には使わない */
+  eatPulses: number[] = [];
 
   /** 頭を `head` に置き、胴体を下向きに伸ばした状態で上向きに生成する */
   constructor(head: Position, rules: Rules) {
@@ -126,6 +131,7 @@ export class Snake {
   }
 
   advance(next: Position): void {
+    this.eatPulses = this.eatPulses.map((n) => n + 1).filter((n) => n < EAT_PULSE_MOVES);
     this.body.unshift(next);
     if (this.pendingGrowth > 0) {
       this.pendingGrowth -= 1;
