@@ -153,7 +153,11 @@ AI 自身のフィールドから見た、盤面 (9 × 16 × 16) と状態ベク
 ### 出力
 
 `up, down, left, right, boost, use_item` の順に並んだ 6 個の Q 値を出力し、最大のものを行動として選びます。
-難易度を下げるときは、`difficulty[].random_action_rate` の確率でランダムな行動に置き換えます。
+AI の行動はいつもこの最大の Q 値のものです。
+Web 版の「あなた vs AI」の難易度は、AI を弱くするのではなく、人の入力を AI が補助する範囲で変えます。
+人が選んだ向きで次に移動すると衝突する場合、その衝突が補助の範囲なら、同じフィールドを観測した AI の行動に人の入力を差し替えます (AI も衝突を選べばそのまま衝突します)。
+補助の範囲は、かんたんが外周の壁・お邪魔ブロック・自分の体、ふつうが外周の壁だけ、むずかしいがなしです。
+これは人の入力を `step` に渡す前の処理で、この文書のルール (7〜9章) は変わりません。実装は `web/src/ai/assist.ts` です。
 
 ## 11. モデル JSON の形式
 
@@ -170,7 +174,7 @@ Web 版は `model/recent-model/` にあるファイルの名前から盤面サ�
 | `game` | 学習時のゲームルール (config.yaml の `game` と同じ構造) |
 | `observation` | 観測チャネル・特徴量の名前と正規化定数 |
 | `actions` | 出力の並び |
-| `difficulty` | 難易度ごとのランダム行動率 |
+| `difficulty` | 難易度の一覧。Web 版は `name` (`easy`・`medium`・`hard`) だけを選択肢に使い、`random_action_rate` は使わない |
 | `network.conv[]` | 畳み込み層。`weight` は `[out_channels][in_channels][kernel_size][kernel_size]` を平坦化したもの |
 | `network.dense[]` | 全結合層。`weight` は `[out_features][in_features]` を平坦化したもの |
 

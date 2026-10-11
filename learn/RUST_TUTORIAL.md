@@ -440,7 +440,7 @@ error[E0308]: mismatched types
         };
 ```
 
-TS 版では、同じ処理を三項演算子で書いています ([web/src/game/snake.ts:111](../web/src/game/snake.ts#L111))。Rust には三項演算子が無く、`if` 式を使います。
+TS 版では、同じ処理を三項演算子で書いています ([web/src/game/snake.ts:116](../web/src/game/snake.ts#L116))。Rust には三項演算子が無く、`if` 式を使います。
 `match` も式です (6 章)。`return` は、途中で関数を抜けたいときにだけ使います (たとえば [src/env/snake.rs:148-151](src/env/snake.rs#L148-L151) の `return false;`)。
 
 ### 4.5 タプルと分解
@@ -2258,7 +2258,7 @@ impl Obs {
 
 進むときは、先頭に新しい頭を足し、末尾の尻尾を取ります。
 `Vec` の先頭に挿入すると全要素をずらすので時間が長さに比例します (O(n))。`VecDeque` (リングバッファでできた両端キュー) なら、両端の出し入れはどちらも一定時間 (O(1)) です。
-TS 版は配列の `unshift` を使っていて ([web/src/game/snake.ts:129](../web/src/game/snake.ts#L129))、こちらは長さに比例した時間がかかります (ヘビは短いので、実際には問題になりません)。
+TS 版は配列の `unshift` を使っていて ([web/src/game/snake.ts:135](../web/src/game/snake.ts#L135))、こちらは長さに比例した時間がかかります (ヘビは短いので、実際には問題になりません)。
 
 n ステップの遷移を組み立てる `NStepBuilder` も、「後ろに足して前から取る」ので `VecDeque` を使っています ([src/replay.rs:149](src/replay.rs#L149))。
 
