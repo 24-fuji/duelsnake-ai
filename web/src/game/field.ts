@@ -141,6 +141,7 @@ export class Field {
       const [item] = this.items.splice(idx, 1);
       this.consume(item.kind, rules);
       this.eaten = item.kind;
+      if (item.kind.endsWith("_apple")) snake.eatPulses.push(0);
     }
   }
 
