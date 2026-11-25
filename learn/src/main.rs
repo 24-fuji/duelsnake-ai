@@ -27,11 +27,14 @@ use trainer::{CommitPolicy, OutputPaths, Trainer};
 const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
 /// 盤面サイズごとの最新モデルを置くフォルダ (<out_dir> の下)。Web アプリはここのモデルを使う
 const RECENT_DIR: &str = "recent-model";
-/// 学習を始める直前の最新モデルを取っておくフォルダ (<out_dir> の下)。新モデルとの対戦に使う
+/// 旧モデルを置くフォルダ (<out_dir> の下)。新モデルとの対戦に使う
 const PREVIOUS_DIR: &str = "previous-model";
+/// 旧モデルを取り出すブランチと、そのブランチでの最新モデルのフォルダ (リポジトリ直下から)
+const PREVIOUS_MODEL_BRANCH: &str = "main";
+const BRANCH_MODEL_DIR: &str = "model/recent-model";
 
 /// DuelSnake-AI の自己対戦強化学習。Ctrl+C で中断すると、その時点のモデルを JSON で保存して終了する。
-/// 学習を始める前に、同じ盤面の最新モデルを <out_dir>/previous-model/ に旧モデルとして取っておく
+/// 学習を始める前に、main ブランチにある同じ盤面のモデルを <out_dir>/previous-model/ に旧モデルとして置く
 #[derive(Parser)]
 #[command(args_conflicts_with_subcommands = true)]
 struct Cli {
@@ -77,14 +80,20 @@ enum Command {
 
 #[derive(Args)]
 struct VersusArgs {
-    /// 旧モデル [既定: <out_dir>/previous-model/snake-model-<幅>x<高さ>.json (学習を始める直前の最新モデル)]
+    /// この盤面だけで対戦する (例: 8-8 は幅 8・高さ 8。8x8 や、正方形なら 8 だけでもよい)
+    /// [既定: main と <out_dir>/recent-model/ の両方にモデルがある、すべての盤面で対戦する]
+    #[arg(long, value_name = "W-H", value_parser = parse_size)]
+    size: Option<(i32, i32)>,
+    /// 旧モデル [既定: <out_dir>/previous-model/snake-model-<幅>x<高さ>.json。対戦の前に main ブランチのモデルで置き換える]
+    /// 指定すると、--size が無ければこのモデルの盤面だけで対戦する
     #[arg(long, value_name = "MODEL_JSON")]
     old: Option<PathBuf>,
     /// 新モデル [既定: <out_dir>/recent-model/snake-model-<幅>x<高さ>.json]
+    /// 指定すると、--size が無ければこのモデルの盤面だけで対戦する
     #[arg(long, value_name = "MODEL_JSON")]
     new: Option<PathBuf>,
-    /// 対戦数。同じ盤面で先手と後手を入れ替えて 2 試合ずつ行うので偶数がよい
-    #[arg(long, default_value_t = 2000)]
+    /// 1つの盤面での対戦数。同じ盤面で先手と後手を入れ替えて 2 試合ずつ行うので偶数がよい
+    #[arg(long, default_value_t = 1000)]
     games: u64,
     /// 同時に進める対戦数 [既定: config の train.num_envs]
     #[arg(long)]
@@ -95,7 +104,7 @@ struct VersusArgs {
     /// 乱数シード [既定: ランダム]
     #[arg(long)]
     seed: Option<u64>,
-    /// 設定ファイル。盤面サイズとゲームルールをここから読む [既定: learn/config.yaml]
+    /// 設定ファイル。ゲームルールをここから読む (盤面の大きさだけは対戦する盤面に合わせる) [既定: learn/config.yaml]
     #[arg(long)]
     config: Option<PathBuf>,
     /// モデルの置き場所 [既定: model/]
@@ -175,15 +184,13 @@ fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut trainer = Trainer::new(config.clone(), device, seed, resume)?;
-    // 学習で上書きする前に、今の最新モデルを旧モデルとして取っておく (前回の旧モデルは置き換える)
-    if recent_model.exists() {
-        let previous_model = out_dir.join(PREVIOUS_DIR).join(&model_file);
-        copy_model(&recent_model, &previous_model)?;
-        notices.push(format!(
-            "学習前の最新モデルを旧モデルとして取っておきました: {} (`just versus` で新モデルと対戦できます)",
-            previous_model.display()
-        ));
-    }
+    notices.push(match save_branch_model_as_previous(&out_dir, &model_file) {
+        Ok(path) => format!(
+            "{PREVIOUS_MODEL_BRANCH} ブランチのモデルを旧モデルとして置きました: {} (`just versus` で新モデルと対戦できます)",
+            path.display()
+        ),
+        Err(e) => format!("警告: 旧モデルを置けませんでした: {e}"),
+    });
     let grid_len = GRID_CHANNELS * (config.game.grid.width * config.game.grid.height) as usize;
     let replay_mb = (config.train.replay_capacity
         * ReplayBuffer::bytes_per_transition(grid_len, VECTOR_FEATURES)) as f64
@@ -271,71 +278,132 @@ fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// モデルのファイルを写す。一時ファイルに書いてから置き換えるので、途中で止まっても壊れたファイルが残らない
-fn copy_model(from: &Path, to: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(dir) = to.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    let tmp = to.with_extension("json.tmp");
-    fs::copy(from, &tmp)
-        .map_err(|e| format!("{} を {} に写せません: {e}", from.display(), tmp.display()))?;
-    fs::rename(&tmp, to)?;
-    Ok(())
+/// main ブランチの最新モデル (model/recent-model/<model_file>) を <out_dir>/previous-model/ に書き出し、そのパスを返す。
+/// 作業中のブランチのモデルではなく、いつも main のモデルを旧モデルにする。
+/// 一時ファイルに書いてから置き換えるので、途中で止まっても壊れたファイルが残らない
+fn save_branch_model_as_previous(out_dir: &Path, model_file: &str) -> Result<PathBuf, String> {
+    let source = format!("{BRANCH_MODEL_DIR}/{model_file}");
+    let content = git::show_file(repo_dir(), PREVIOUS_MODEL_BRANCH, &source).map_err(|e| {
+        format!("{PREVIOUS_MODEL_BRANCH} ブランチの {source} を取り出せません ({e})")
+    })?;
+    let to = out_dir.join(PREVIOUS_DIR).join(model_file);
+    let write = || -> std::io::Result<()> {
+        fs::create_dir_all(out_dir.join(PREVIOUS_DIR))?;
+        let tmp = to.with_extension("json.tmp");
+        fs::write(&tmp, &content)?;
+        fs::rename(&tmp, &to)
+    };
+    write().map_err(|e| format!("{} に書けません: {e}", to.display()))?;
+    Ok(to)
 }
 
-/// 旧モデルと新モデルを対戦させ、結果を表示して log/versus-<日時>.txt にも残す
+/// 旧モデルと新モデルを対戦させ、結果を表示して log/versus-<日時>.txt にも残す。
+/// 盤面を指定しなければ、旧モデル (main) と新モデルがそろうすべての盤面で対戦する
 fn versus(args: VersusArgs) -> Result<(), Box<dyn std::error::Error>> {
     let (config_path, out_dir) = resolve_paths(args.config, args.out_dir);
     let config = Config::load(&config_path)?;
-    let rules = Rules::from_config(&config.game);
-    let model_file = export::model_file_name(&config.game.grid);
-    let old = match args.old {
-        Some(path) => path,
-        None => {
-            let path = out_dir.join(PREVIOUS_DIR).join(&model_file);
-            if !path.exists() {
+    let mut lines = Vec::new();
+    let sizes = match (args.size, args.new.as_ref().or(args.old.as_ref())) {
+        (Some(size), _) => vec![size],
+        (None, Some(path)) => {
+            let grid = ModelFile::read(path)?.game.grid;
+            vec![(grid.width, grid.height)]
+        }
+        (None, None) => {
+            let (sizes, skipped) = paired_sizes(&out_dir);
+            if !skipped.is_empty() {
+                lines.push(format!(
+                    "ペアがそろわないので対戦しない盤面: {}",
+                    skipped.join(", ")
+                ));
+            }
+            if sizes.is_empty() {
                 return Err(format!(
-                    "旧モデル {} がありません。`just train` か `just train-resume` を始めると、その直前の最新モデルがここに取っておかれます。ほかのモデルと比べるなら --old で指定してください",
-                    path.display()
+                    "{PREVIOUS_MODEL_BRANCH} ブランチと {} の両方にモデルがある盤面がありません。--size か --old / --new で指定してください",
+                    out_dir.join(RECENT_DIR).display()
                 )
                 .into());
             }
-            path
+            sizes
         }
     };
-    let new = args
-        .new
-        .unwrap_or_else(|| out_dir.join(RECENT_DIR).join(&model_file));
     let envs = args.envs.unwrap_or(config.train.num_envs).max(1);
     let threads = set_threads(args.threads);
     let device = Device::cuda_if_available();
     let seed = args.seed.unwrap_or_else(rand::random);
-
-    let contenders: [Contender; CONTENDERS] = [
-        Contender::load(&old, &rules, device)?,
-        Contender::load(&new, &rules, device)?,
-    ];
-    let mut lines = vec![format!(
-        "DuelSnake-AI 旧モデル vs 新モデル (盤面 {} / デバイス {device:?} / スレッド {threads} / 同時対戦 {envs} / シード {seed})",
-        export::size_label(&config.game.grid)
-    )];
-    for (c, label) in [(OLD, "旧モデル"), (NEW, "新モデル")] {
-        if contenders[c].game != config.game {
-            lines.push(format!(
-                "注意: {label}を学習したときのゲームルールが config.yaml と異なります。config.yaml のルールで対戦します"
-            ));
-        }
-    }
+    lines.insert(
+        0,
+        format!(
+            "DuelSnake-AI 旧モデル vs 新モデル (盤面 {} / 各 {} 試合 / デバイス {device:?} / スレッド {threads} / 同時対戦 {envs} / シード {seed})",
+            sizes.iter().map(|&s| size_text(s)).collect::<Vec<_>>().join(", "),
+            thousands(args.games)
+        ),
+    );
     for line in &lines {
         println!("{line}");
     }
 
-    let tally = arena::play(&contenders, rules, args.games, envs, seed, device);
-    let report = arena::report(&contenders, &tally);
-    for line in &report {
+    let mut results = Vec::new();
+    for &(width, height) in &sizes {
+        let mut game = config.game.clone();
+        (game.grid.width, game.grid.height) = (width, height);
+        let rules = Rules::from_config(&game);
+        let model_file = export::model_file_name(&game.grid);
+        let mut section = vec![
+            String::new(),
+            format!("=== 盤面 {}", size_text((width, height))),
+        ];
+        let old = match &args.old {
+            Some(path) => path.clone(),
+            None => {
+                // main のモデルが変わっていることがあるので、対戦の前に取り出し直す
+                let path = out_dir.join(PREVIOUS_DIR).join(&model_file);
+                match save_branch_model_as_previous(&out_dir, &model_file) {
+                    Ok(_) => {}
+                    Err(e) if path.exists() => section.push(format!(
+                        "警告: 旧モデルを更新できませんでした。前に置いた旧モデルを使います: {e}"
+                    )),
+                    Err(e) => {
+                        return Err(format!(
+                            "旧モデルがありません: {e}。ほかのモデルと比べるなら --old で指定してください"
+                        )
+                        .into())
+                    }
+                }
+                path
+            }
+        };
+        let new = args
+            .new
+            .clone()
+            .unwrap_or_else(|| out_dir.join(RECENT_DIR).join(&model_file));
+        let contenders: [Contender; CONTENDERS] = [
+            Contender::load(&old, &rules, device)?,
+            Contender::load(&new, &rules, device)?,
+        ];
+        for (c, label) in [(OLD, "旧モデル"), (NEW, "新モデル")] {
+            if contenders[c].game != game {
+                section.push(format!(
+                    "注意: {label}を学習したときのゲームルールが config.yaml と異なります。config.yaml のルールで対戦します"
+                ));
+            }
+        }
+        let tally = arena::play(&contenders, rules, args.games, envs, seed, device);
+        section.extend(arena::report(&contenders, &tally));
+        for line in &section {
+            println!("{line}");
+        }
+        lines.extend(section);
+        results.push((size_text((width, height)), tally));
+    }
+
+    let summary = arena::summary(&results);
+    println!();
+    for line in &summary {
         println!("{line}");
     }
-    lines.extend(report);
+    lines.push(String::new());
+    lines.extend(summary);
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let log_path = repo_dir().join(format!("log/versus-{timestamp}.txt"));
     match fs::write(&log_path, lines.join("\n") + "\n") {
@@ -346,6 +414,65 @@ fn versus(args: VersusArgs) -> Result<(), Box<dyn std::error::Error>> {
         ),
     }
     Ok(())
+}
+
+/// 盤面の大きさの指定 (例: 8-8、12-10)。8x8 の形 (モデルのファイル名と同じ) でもよい。数が 1 つだけなら正方形
+fn parse_size(text: &str) -> Result<(i32, i32), String> {
+    let number = |s: &str| s.trim().parse::<i32>().ok().filter(|&n| n > 0);
+    let size = match text.split_once(['-', 'x', 'X']) {
+        Some((w, h)) => number(w).zip(number(h)),
+        None => number(text).map(|n| (n, n)),
+    };
+    size.ok_or_else(|| format!("盤面は 8-8 や 12-10 の形で指定してください: {text}"))
+}
+
+/// 画面とログに出す盤面の大きさ (例: 8-8)
+fn size_text((width, height): (i32, i32)) -> String {
+    format!("{width}-{height}")
+}
+
+/// 旧モデル (main ブランチ) と新モデル (<out_dir>/recent-model/) の両方がある盤面を、小さい順に返す。
+/// 2 つ目は片方にしか無い盤面の説明
+fn paired_sizes(out_dir: &Path) -> (Vec<(i32, i32)>, Vec<String>) {
+    let parse_all = |labels: Vec<String>| -> Vec<(i32, i32)> {
+        let mut sizes: Vec<_> = labels.iter().filter_map(|l| parse_size(l).ok()).collect();
+        sizes.sort_by_key(|&(w, h)| (w * h, w));
+        sizes
+    };
+    let mut notes = Vec::new();
+    let main_files = git::list_files(repo_dir(), PREVIOUS_MODEL_BRANCH, BRANCH_MODEL_DIR)
+        .unwrap_or_else(|e| {
+            notes.push(format!(
+                "{PREVIOUS_MODEL_BRANCH} ブランチのモデルの一覧を読めません ({e})"
+            ));
+            Vec::new()
+        });
+    let on_main = parse_all(
+        main_files
+            .iter()
+            .filter_map(|name| export::size_from_file_name(name).map(str::to_string))
+            .collect(),
+    );
+    let recent = parse_all(model_sizes_in(&out_dir.join(RECENT_DIR)));
+    let paired = recent
+        .iter()
+        .copied()
+        .filter(|s| on_main.contains(s))
+        .collect();
+    let mut skipped = notes;
+    skipped.extend(
+        recent
+            .iter()
+            .filter(|s| !on_main.contains(s))
+            .map(|&s| format!("{} ({PREVIOUS_MODEL_BRANCH} に無い)", size_text(s))),
+    );
+    skipped.extend(
+        on_main
+            .iter()
+            .filter(|s| !recent.contains(s))
+            .map(|&s| format!("{} (新モデルが無い)", size_text(s))),
+    );
+    (paired, skipped)
 }
 
 /// 再開元のモデルを読む。盤面サイズが config.yaml と違えばエラーにする
@@ -382,7 +509,7 @@ fn read_resume_model(
     Ok(model)
 }
 
-/// `dir` にある盤面サイズごとのモデルの盤面サイズ
+/// `dir` にある盤面サイズごとのモデルの盤面サイズ (例: 16x16)
 fn model_sizes_in(dir: &Path) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -395,4 +522,22 @@ fn model_sizes_in(dir: &Path) -> Vec<String> {
         .collect();
     sizes.sort();
     sizes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_board_sizes() {
+        assert_eq!(parse_size("8-8"), Ok((8, 8)));
+        assert_eq!(parse_size("12-10"), Ok((12, 10)));
+        assert_eq!(parse_size("8x8"), Ok((8, 8)));
+        assert_eq!(parse_size("12X10"), Ok((12, 10)));
+        assert_eq!(parse_size("16"), Ok((16, 16)));
+        assert_eq!(size_text((12, 10)), "12-10");
+        for bad in ["", "-8", "8-", "0-8", "8-8-8", "x8", "8x", "8x8x8", "abc"] {
+            assert!(parse_size(bad).is_err(), "{bad}");
+        }
+    }
 }

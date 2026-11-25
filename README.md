@@ -8,7 +8,7 @@ Human vs AI リアルタイム対戦型スネークゲーム。
   - `RUST_TUTORIAL.md`: learn/ のコードを教材にした Rust 入門 (文法・所有権・メモリ管理・強化学習の実装)
 - `model/`: 学習済みモデル (JSON)
   - `recent-model/snake-model-<幅>x<高さ>.json`: 盤面サイズごとの最新モデル。Web アプリはここにある盤面サイズから選べる
-  - `previous-model/snake-model-<幅>x<高さ>.json`: 学習を始める直前の最新モデル (旧モデル)。新モデルとの対戦に使う (git 管理外)
+  - `previous-model/snake-model-<幅>x<高さ>.json`: main ブランチにある最新モデル (旧モデル)。新モデルとの対戦に使う (git 管理外)
   - `models/`: 盤面サイズとタイムスタンプ付きのバックアップ (git 管理外)
 - `web/`: Vite + React + TypeScriptによるフロントエンドWebアプリ
   - `WEB_TUTORIAL.md`: web/ のコードを教材にした Web アプリ開発入門 (動く場所と通信・設計の選び方・React・Canvas・入力・AI 推論・テスト・公開)
@@ -25,7 +25,7 @@ just train --games 50000  # 指定した試合数で終了
 just train --commit-on-interrupt  # Ctrl+C で中断したら、保存した最新モデルをコミットしてプッシュする
 just train-resume         # 同じ盤面サイズの最新モデルから再開 (--commit-on-interrupt も使える)
 just train-watch          # 学習中のログを表示し続ける (別の端末で実行)
-just versus               # 旧モデル (学習前) と新モデル (最新) を対戦させて強さを比べる
+just versus               # 旧モデル (main のモデル) と新モデル (最新) を、両方そろう盤面すべてで対戦させて強さを比べる
 just test                 # ルールとモデル書き出しのテスト
 ```
 
@@ -53,19 +53,25 @@ AI は自分の盤面と状態に加えて、相手の盤面と状態も見ま�
 
 ### 旧モデルと新モデルの対戦
 
-`just train` と `just train-resume` は、学習を始める前に同じ盤面サイズの最新モデルを `model/previous-model/snake-model-<幅>x<高さ>.json` に写して取っておきます (旧モデル)。
-学習を始めるたびに、そのときの最新モデルで置き換わります。最新モデルが無いときは何もしません。
+旧モデルは、いつも main ブランチにある同じ盤面サイズの最新モデル (`model/recent-model/snake-model-<幅>x<高さ>.json`) です。
+作業中のブランチでモデルを何度コミットしても、旧モデルは main のモデルのままです。
+`just train`・`just train-resume`・`just versus` を始めるたびに、main のモデルを git から取り出して `model/previous-model/snake-model-<幅>x<高さ>.json` に置き直します。
+使うのは手元の `main` ブランチなので、GitHub で main を更新したときは `git fetch origin main:main` などで手元の main も更新してください。
+main にその盤面サイズのモデルが無いときは、学習は警告を出して続け、`just versus` はエラーで止まります (`--old` で比べる相手を指定すれば対戦できます)。
 
 `just versus` は、旧モデルと最新モデル (新モデル) を AI 同士で対戦させ、どれだけ強くなったかを表示します。
+何も指定しなければ、旧モデル (main) と新モデル (`model/recent-model/`) の両方がそろう盤面すべてで 1000 試合ずつ対戦し、最後に盤面ごとの勝ち・負け・引き分けと勝率を表にまとめます。
+片方にしか無い盤面は、対戦せずにそのことを表示します。
 
 ```sh
-just versus                     # 2000 試合
-just versus --games 4000        # 試合数を変える (多いほど勝率の幅が狭まる)
-just versus --old model/models/snake-model-16x16-<日時>.json  # 旧モデルの代わりにバックアップと比べる
+just versus                     # ペアがそろう盤面すべてで 1000 試合ずつ
+just versus --size 8-8          # 幅 8・高さ 8 の盤面だけで 1000 試合 (--size 8 でもよい)
+just versus --games 4000        # 1つの盤面での試合数を変える (多いほど勝率の幅が狭まる)
+just versus --old model/models/snake-model-16x16-<日時>.json  # 旧モデルの代わりにバックアップと比べる (その盤面だけ)
 just versus --old <JSON> --new <JSON>                         # 任意の2つのモデルを比べる
 ```
 
-- 盤面サイズとゲームルールは `learn/config.yaml` に従います。モデルを学習したときのルールと違えば注意を出します。
+- ゲームルールは `learn/config.yaml` に従い、盤面の大きさだけを対戦する盤面に合わせます。モデルを学習したときのルールと違えば注意を出します。
 - どちらのモデルも常に Q 値が最大の行動を取ります (ランダムな行動はしません)。
 - 同じ盤面で先手と後手を入れ替えて 2 試合ずつ行い、盤面の運とプレイヤー番号による偏りを打ち消します。
 - ネットワークの層の構成はモデルのファイルから読むので、`model` の設定を変える前のモデルとも比べられます。

@@ -379,6 +379,31 @@ pub fn report(contenders: &[Contender; CONTENDERS], tally: &Tally) -> Vec<String
     lines
 }
 
+/// 盤面ごとの結果を 1 行ずつ並べた表。`results` は (盤面, 集計) の並び
+pub fn summary(results: &[(String, Tally)]) -> Vec<String> {
+    let mut lines = vec![
+        "まとめ (新モデルから見た結果)".to_string(),
+        format!(
+            "  {:<7} {:>6} {:>6} {:>6} {:>6}  {}",
+            "盤面", "試合", "勝ち", "負け", "分け", "勝率 (引き分けは 0.5 勝, 95% 信頼区間)"
+        ),
+    ];
+    for (size, tally) in results {
+        let (rate, margin) = tally.new_win_rate();
+        lines.push(format!(
+            "  {:<9} {:>8} {:>8} {:>8} {:>8}  {:5.1}% ± {:.1}%",
+            size,
+            thousands(tally.games),
+            thousands(tally.wins[NEW]),
+            thousands(tally.wins[OLD]),
+            thousands(tally.draws),
+            rate * 100.0,
+            margin * 100.0
+        ));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +498,23 @@ mod tests {
         assert_eq!(tally.wins[OLD], tally.wins[NEW]);
         assert_eq!(tally.score_sum[OLD], tally.score_sum[NEW]);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn summary_has_a_row_per_board() {
+        let tally = Tally {
+            games: 4,
+            wins: [1, 2],
+            draws: 1,
+            ..Tally::default()
+        };
+        let lines = summary(&[
+            ("8-8".to_string(), tally.clone()),
+            ("16-16".to_string(), tally),
+        ]);
+        assert_eq!(lines.len(), 4);
+        assert!(lines[2].trim_start().starts_with("8-8"), "{}", lines[2]);
+        assert!(lines[3].contains("62.5%"), "{}", lines[3]);
     }
 
     #[test]

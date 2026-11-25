@@ -1,4 +1,4 @@
-//! 学習中のモデルを git にコミットしてプッシュする
+//! 学習中のモデルを git にコミットしてプッシュする。旧モデルにする main のモデルも git から取り出す
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -14,8 +14,28 @@ pub fn commit_and_push(file: &Path, message: &str) -> Result<(), String> {
     git(dir, &["push"])
 }
 
+/// ブランチなど `rev` の時点の `path` (リポジトリ直下からのパス) の中身を返す。`dir` はリポジトリの中のどこでもよい
+pub fn show_file(dir: &Path, rev: &str, path: &str) -> Result<Vec<u8>, String> {
+    git_output(dir, &["show", &format!("{rev}:{path}")])
+}
+
+/// ブランチなど `rev` の時点で、フォルダ `path` (リポジトリ直下から) にあるファイルの名前
+pub fn list_files(dir: &Path, rev: &str, path: &str) -> Result<Vec<String>, String> {
+    let tree = format!("{rev}:{path}");
+    let output = git_output(dir, &["ls-tree", "--name-only", &tree])?;
+    Ok(String::from_utf8_lossy(&output)
+        .lines()
+        .map(str::to_string)
+        .collect())
+}
+
 fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
-    // 学習の画面を乱さないよう、入力は求めず、出力は失敗したときだけ返す
+    git_output(dir, args).map(|_| ())
+}
+
+/// git を実行し、成功すれば標準出力を返す
+fn git_output(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    // 学習の画面を乱さないよう、入力は求めず、出力は呼び出し元に返すか、失敗したときのエラーに入れる
     let output = Command::new("git")
         .current_dir(dir)
         .args(args)
@@ -24,7 +44,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
         .output()
         .map_err(|e| format!("git を実行できません: {e}"))?;
     if output.status.success() {
-        return Ok(());
+        return Ok(output.stdout);
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     let detail = if stderr.trim().is_empty() {
@@ -105,6 +125,26 @@ mod tests {
             run(&work, &["diff", "--cached", "--name-only"]).trim(),
             "README"
         );
+        fs::remove_dir_all(remote.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn shows_a_file_on_another_branch() {
+        let (remote, work) = repos();
+        run(&work, &["branch", "base"]);
+        fs::write(work.join("README"), "edited").unwrap();
+        run(&work, &["commit", "-q", "-am", "edit"]);
+
+        // 作業中のファイルではなく、指定したブランチの時点の中身を返す
+        assert_eq!(show_file(&work, "base", "README").unwrap(), b"first");
+        assert_eq!(
+            show_file(&work.join("model"), "base", "README").unwrap(),
+            b"first"
+        );
+        assert_eq!(list_files(&work, "base", "").unwrap(), vec!["README"]);
+        assert!(list_files(&work, "base", "no-such-dir").is_err());
+        let err = show_file(&work, "base", "no-such-file").unwrap_err();
+        assert!(err.starts_with("git show が失敗しました"), "{err}");
         fs::remove_dir_all(remote.parent().unwrap()).unwrap();
     }
 

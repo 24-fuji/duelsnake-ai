@@ -5,8 +5,8 @@
 # Web 版と共通のパラメータ。学習済みモデルの JSON にもそのまま書き出される。
 game:
   grid:
-    width: 16
-    height: 16
+    width: 8
+    height: 8
     tick_seconds: 0.1 # 1ティックの長さ。以下の秒数はすべてティック数に丸めて扱う
     time_limit_seconds: 30.0
 
