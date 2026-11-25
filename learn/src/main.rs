@@ -1,3 +1,4 @@
+mod arena;
 mod config;
 mod env;
 mod export;
@@ -8,9 +9,11 @@ mod monitor;
 mod replay;
 mod trainer;
 
-use clap::Parser;
+use arena::{Contender, CONTENDERS, NEW, OLD};
+use clap::{Args, Parser, Subcommand};
 use config::Config;
 use env::observation::{GRID_CHANNELS, VECTOR_FEATURES};
+use env::rules::Rules;
 use export::ModelFile;
 use monitor::{thousands, TrainLog};
 use replay::ReplayBuffer;
@@ -22,10 +25,18 @@ use tch::Device;
 use trainer::{CommitPolicy, OutputPaths, Trainer};
 
 const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
+/// 盤面サイズごとの最新モデルを置くフォルダ (<out_dir> の下)。Web アプリはここのモデルを使う
+const RECENT_DIR: &str = "recent-model";
+/// 学習を始める直前の最新モデルを取っておくフォルダ (<out_dir> の下)。新モデルとの対戦に使う
+const PREVIOUS_DIR: &str = "previous-model";
 
-/// DuelSnake-AI の自己対戦強化学習。Ctrl+C で中断すると、その時点のモデルを JSON で保存して終了する
+/// DuelSnake-AI の自己対戦強化学習。Ctrl+C で中断すると、その時点のモデルを JSON で保存して終了する。
+/// 学習を始める前に、同じ盤面の最新モデルを <out_dir>/previous-model/ に旧モデルとして取っておく
 #[derive(Parser)]
+#[command(args_conflicts_with_subcommands = true)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// 設定ファイル [既定: learn/config.yaml]
     #[arg(long)]
     config: Option<PathBuf>,
@@ -58,25 +69,84 @@ struct Cli {
     commit_on_interrupt: bool,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
-    let crate_dir = Path::new(CRATE_DIR);
-    let repo_dir = crate_dir.parent().unwrap_or(crate_dir);
-    let config_path = cli.config.unwrap_or_else(|| crate_dir.join("config.yaml"));
-    let out_dir = cli.out_dir.unwrap_or_else(|| repo_dir.join("model"));
+#[derive(Subcommand)]
+enum Command {
+    /// 旧モデルと新モデルを対戦させて強さを比べる (学習はしない)
+    Versus(VersusArgs),
+}
 
-    let mut config = Config::load(&config_path)?;
-    let size = export::size_label(&config.game.grid);
-    let recent_dir = out_dir.join("recent-model");
-    let recent_model = recent_dir.join(export::model_file_name(&config.game.grid));
-    if let Some(envs) = cli.envs {
-        config.train.num_envs = envs.max(1);
+#[derive(Args)]
+struct VersusArgs {
+    /// 旧モデル [既定: <out_dir>/previous-model/snake-model-<幅>x<高さ>.json (学習を始める直前の最新モデル)]
+    #[arg(long, value_name = "MODEL_JSON")]
+    old: Option<PathBuf>,
+    /// 新モデル [既定: <out_dir>/recent-model/snake-model-<幅>x<高さ>.json]
+    #[arg(long, value_name = "MODEL_JSON")]
+    new: Option<PathBuf>,
+    /// 対戦数。同じ盤面で先手と後手を入れ替えて 2 試合ずつ行うので偶数がよい
+    #[arg(long, default_value_t = 2000)]
+    games: u64,
+    /// 同時に進める対戦数 [既定: config の train.num_envs]
+    #[arg(long)]
+    envs: Option<usize>,
+    /// libtorch のスレッド数 [既定: 論理コア数の半分]
+    #[arg(long)]
+    threads: Option<usize>,
+    /// 乱数シード [既定: ランダム]
+    #[arg(long)]
+    seed: Option<u64>,
+    /// 設定ファイル。盤面サイズとゲームルールをここから読む [既定: learn/config.yaml]
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// モデルの置き場所 [既定: model/]
+    #[arg(long)]
+    out_dir: Option<PathBuf>,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cli = Cli::parse();
+    match cli.command.take() {
+        Some(Command::Versus(args)) => versus(args),
+        None => train(cli),
     }
-    let threads = cli.threads.unwrap_or_else(|| {
+}
+
+fn repo_dir() -> &'static Path {
+    let crate_dir = Path::new(CRATE_DIR);
+    crate_dir.parent().unwrap_or(crate_dir)
+}
+
+/// (設定ファイル, モデルの置き場所)。指定が無ければ既定の場所
+fn resolve_paths(config: Option<PathBuf>, out_dir: Option<PathBuf>) -> (PathBuf, PathBuf) {
+    (
+        config.unwrap_or_else(|| Path::new(CRATE_DIR).join("config.yaml")),
+        out_dir.unwrap_or_else(|| repo_dir().join("model")),
+    )
+}
+
+/// libtorch のスレッド数を決めて設定する。小さなネットワークでは論理コアをすべて使うとかえって遅くなるので既定は半分
+fn set_threads(threads: Option<usize>) -> usize {
+    let threads = threads.unwrap_or_else(|| {
         let logical = std::thread::available_parallelism().map_or(1, |n| n.get());
         (logical / 2).max(1)
     });
     tch::set_num_threads(threads as i32);
+    threads
+}
+
+fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let repo_dir = repo_dir();
+    let (config_path, out_dir) = resolve_paths(cli.config, cli.out_dir);
+
+    let mut config = Config::load(&config_path)?;
+    let size = export::size_label(&config.game.grid);
+    let model_file = export::model_file_name(&config.game.grid);
+    let recent_dir = out_dir.join(RECENT_DIR);
+    let recent_model = recent_dir.join(&model_file);
+    if let Some(envs) = cli.envs {
+        config.train.num_envs = envs.max(1);
+    }
+    let threads = set_threads(cli.threads);
     let device = Device::cuda_if_available();
     let seed = cli.seed.unwrap_or_else(rand::random);
 
@@ -105,6 +175,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut trainer = Trainer::new(config.clone(), device, seed, resume)?;
+    // 学習で上書きする前に、今の最新モデルを旧モデルとして取っておく (前回の旧モデルは置き換える)
+    if recent_model.exists() {
+        let previous_model = out_dir.join(PREVIOUS_DIR).join(&model_file);
+        copy_model(&recent_model, &previous_model)?;
+        notices.push(format!(
+            "学習前の最新モデルを旧モデルとして取っておきました: {} (`just versus` で新モデルと対戦できます)",
+            previous_model.display()
+        ));
+    }
     let grid_len = GRID_CHANNELS * (config.game.grid.width * config.game.grid.height) as usize;
     let replay_mb = (config.train.replay_capacity
         * ReplayBuffer::bytes_per_transition(grid_len, VECTOR_FEATURES)) as f64
@@ -189,6 +268,83 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     trainer.run(&running, cli.games, &paths, commit, &mut log)?;
     println!("学習を終了しました");
     log.event("学習を終了しました")?;
+    Ok(())
+}
+
+/// モデルのファイルを写す。一時ファイルに書いてから置き換えるので、途中で止まっても壊れたファイルが残らない
+fn copy_model(from: &Path, to: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(dir) = to.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = to.with_extension("json.tmp");
+    fs::copy(from, &tmp)
+        .map_err(|e| format!("{} を {} に写せません: {e}", from.display(), tmp.display()))?;
+    fs::rename(&tmp, to)?;
+    Ok(())
+}
+
+/// 旧モデルと新モデルを対戦させ、結果を表示して log/versus-<日時>.txt にも残す
+fn versus(args: VersusArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let (config_path, out_dir) = resolve_paths(args.config, args.out_dir);
+    let config = Config::load(&config_path)?;
+    let rules = Rules::from_config(&config.game);
+    let model_file = export::model_file_name(&config.game.grid);
+    let old = match args.old {
+        Some(path) => path,
+        None => {
+            let path = out_dir.join(PREVIOUS_DIR).join(&model_file);
+            if !path.exists() {
+                return Err(format!(
+                    "旧モデル {} がありません。`just train` か `just train-resume` を始めると、その直前の最新モデルがここに取っておかれます。ほかのモデルと比べるなら --old で指定してください",
+                    path.display()
+                )
+                .into());
+            }
+            path
+        }
+    };
+    let new = args
+        .new
+        .unwrap_or_else(|| out_dir.join(RECENT_DIR).join(&model_file));
+    let envs = args.envs.unwrap_or(config.train.num_envs).max(1);
+    let threads = set_threads(args.threads);
+    let device = Device::cuda_if_available();
+    let seed = args.seed.unwrap_or_else(rand::random);
+
+    let contenders: [Contender; CONTENDERS] = [
+        Contender::load(&old, &rules, device)?,
+        Contender::load(&new, &rules, device)?,
+    ];
+    let mut lines = vec![format!(
+        "DuelSnake-AI 旧モデル vs 新モデル (盤面 {} / デバイス {device:?} / スレッド {threads} / 同時対戦 {envs} / シード {seed})",
+        export::size_label(&config.game.grid)
+    )];
+    for (c, label) in [(OLD, "旧モデル"), (NEW, "新モデル")] {
+        if contenders[c].game != config.game {
+            lines.push(format!(
+                "注意: {label}を学習したときのゲームルールが config.yaml と異なります。config.yaml のルールで対戦します"
+            ));
+        }
+    }
+    for line in &lines {
+        println!("{line}");
+    }
+
+    let tally = arena::play(&contenders, rules, args.games, envs, seed, device);
+    let report = arena::report(&contenders, &tally);
+    for line in &report {
+        println!("{line}");
+    }
+    lines.extend(report);
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let log_path = repo_dir().join(format!("log/versus-{timestamp}.txt"));
+    match fs::write(&log_path, lines.join("\n") + "\n") {
+        Ok(()) => println!("結果を保存しました: {}", log_path.display()),
+        Err(e) => println!(
+            "警告: 結果を {} に保存できませんでした: {e}",
+            log_path.display()
+        ),
+    }
     Ok(())
 }
 

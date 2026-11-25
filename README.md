@@ -8,6 +8,7 @@ Human vs AI リアルタイム対戦型スネークゲーム。
   - `RUST_TUTORIAL.md`: learn/ のコードを教材にした Rust 入門 (文法・所有権・メモリ管理・強化学習の実装)
 - `model/`: 学習済みモデル (JSON)
   - `recent-model/snake-model-<幅>x<高さ>.json`: 盤面サイズごとの最新モデル。Web アプリはここにある盤面サイズから選べる
+  - `previous-model/snake-model-<幅>x<高さ>.json`: 学習を始める直前の最新モデル (旧モデル)。新モデルとの対戦に使う (git 管理外)
   - `models/`: 盤面サイズとタイムスタンプ付きのバックアップ (git 管理外)
 - `web/`: Vite + React + TypeScriptによるフロントエンドWebアプリ
   - `WEB_TUTORIAL.md`: web/ のコードを教材にした Web アプリ開発入門 (動く場所と通信・設計の選び方・React・Canvas・入力・AI 推論・テスト・公開)
@@ -24,6 +25,7 @@ just train --games 50000  # 指定した試合数で終了
 just train --commit-on-interrupt  # Ctrl+C で中断したら、保存した最新モデルをコミットしてプッシュする
 just train-resume         # 同じ盤面サイズの最新モデルから再開 (--commit-on-interrupt も使える)
 just train-watch          # 学習中のログを表示し続ける (別の端末で実行)
+just versus               # 旧モデル (学習前) と新モデル (最新) を対戦させて強さを比べる
 just test                 # ルールとモデル書き出しのテスト
 ```
 
@@ -47,6 +49,27 @@ just test                 # ルールとモデル書き出しのテスト
 - `log/train-<日時>.csv`: 同じ統計の表。グラフを描くときに使う
 
 ログの間隔は `learn/config.yaml` の `train.log_interval_seconds` で変えられます。
+
+### 旧モデルと新モデルの対戦
+
+`just train` と `just train-resume` は、学習を始める前に同じ盤面サイズの最新モデルを `model/previous-model/snake-model-<幅>x<高さ>.json` に写して取っておきます (旧モデル)。
+学習を始めるたびに、そのときの最新モデルで置き換わります。最新モデルが無いときは何もしません。
+
+`just versus` は、旧モデルと最新モデル (新モデル) を AI 同士で対戦させ、どれだけ強くなったかを表示します。
+
+```sh
+just versus                     # 2000 試合
+just versus --games 4000        # 試合数を変える (多いほど勝率の幅が狭まる)
+just versus --old model/models/snake-model-16x16-<日時>.json  # 旧モデルの代わりにバックアップと比べる
+just versus --old <JSON> --new <JSON>                         # 任意の2つのモデルを比べる
+```
+
+- 盤面サイズとゲームルールは `learn/config.yaml` に従います。モデルを学習したときのルールと違えば注意を出します。
+- どちらのモデルも常に Q 値が最大の行動を取ります (ランダムな行動はしません)。
+- 同じ盤面で先手と後手を入れ替えて 2 試合ずつ行い、盤面の運とプレイヤー番号による偏りを打ち消します。
+- ネットワークの層の構成はモデルのファイルから読むので、`model` の設定を変える前のモデルとも比べられます (観測の仕様が変わったモデルとは比べられません)。
+- 新モデルの勝率 (引き分けは 0.5 勝) とその 95% 信頼区間、勝ち方の内訳、平均スコアなどを表示し、同じ内容を `log/versus-<日時>.txt` に残します。
+  信頼区間が 50% をまたがなければ、どちらが強いかを判定として表示します。
 
 ## Web アプリ
 公開版: https://24-fuji.github.io/duelsnake-ai/
