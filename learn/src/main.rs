@@ -192,7 +192,7 @@ fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => format!("警告: 旧モデルを置けませんでした: {e}"),
     });
     let grid_len = GRID_CHANNELS * (config.game.grid.width * config.game.grid.height) as usize;
-    let replay_mb = (config.train.replay_capacity
+    let replay_mb = (config.replay_capacity()
         * ReplayBuffer::bytes_per_transition(grid_len, VECTOR_FEATURES)) as f64
         / 1e6;
     let resumed = trainer.info();
@@ -203,7 +203,14 @@ fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut lines = vec![
         "DuelSnake-AI 自己対戦学習".to_string(),
         format!("  設定       : {}", config_path.display()),
-        format!("  盤面       : {size}"),
+        format!(
+            "  盤面       : {size}{}",
+            if config.board_size().is_some() {
+                format!(" (config.yaml の board_sizes.{size} の設定を使う)")
+            } else {
+                " (board_sizes に設定が無いので model と train の値を使う)".to_string()
+            }
+        ),
         format!(
             "  デバイス   : {device:?} / スレッド {threads} / 同時対戦 {}",
             config.train.num_envs

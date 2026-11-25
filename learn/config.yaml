@@ -33,12 +33,54 @@ game:
 
 # --- ネットワーク構造 ---
 # 盤面 → 畳み込み (3x3, padding 1, ReLU) → 平坦化 + 状態ベクトル → 全結合 (ReLU) → 行動ごとの Q 値
+# 盤面サイズごとの構造は下の board_sizes に書く。ここは board_sizes に無い盤面サイズで使う。
+# 層を変えたモデルからは再開できないので、変えたら just train で新しく学習する
 model:
   conv_layers:
-    - { channels: 16, stride: 1 } # 16x16
-    - { channels: 32, stride: 2 } # 8x8
-    - { channels: 64, stride: 2 } # 4x4
-  hidden_layers: [128]
+    - { channels: 32, stride: 1 }
+    - { channels: 32, stride: 2 }
+    - { channels: 64, stride: 2 }
+  hidden_layers: [256]
+
+# --- 盤面サイズごとの設定 ---
+# game.grid と同じサイズ (幅x高さ) のものがあれば、model と train.replay_capacity をこれで差し替える。書かなかった項目は上の値を使う。
+# 衝突を避けるには頭の周りの細かい位置が要るので、なるべく元の解像度のまま畳み込む層を残す
+# (8x8 で stride 2 を 2 回通すと 2x2 まで縮み、どのマスが空いているかが失われやすい)。
+# GPU が無く CPU で学習するので、広い盤面ほど早めに縮めて、1 回の推論の計算量 (10x10 以上は約 230 万回の積和) をそろえる。
+# リプレイは 1 遷移あたり 2 × (17 × マス数 + 88) バイトほどで、どの盤面も 1GB 弱に収める
+board_sizes:
+  8x8:
+    model:
+      conv_layers:
+        - { channels: 32, stride: 1 } # 8x8
+        - { channels: 32, stride: 1 } # 8x8
+        - { channels: 64, stride: 2 } # 4x4
+      hidden_layers: [256]
+    replay_capacity: 400000 # 約 2.4KB × 400000 = 約 950MB
+  10x10:
+    model:
+      conv_layers:
+        - { channels: 32, stride: 1 } # 10x10
+        - { channels: 32, stride: 1 } # 10x10
+        - { channels: 64, stride: 2 } # 5x5
+      hidden_layers: [256]
+    replay_capacity: 250000 # 約 3.6KB × 250000 = 約 900MB
+  12x12:
+    model:
+      conv_layers:
+        - { channels: 32, stride: 1 } # 12x12
+        - { channels: 32, stride: 2 } # 6x6
+        - { channels: 64, stride: 1 } # 6x6
+      hidden_layers: [256]
+    replay_capacity: 200000 # 約 5.1KB × 200000 = 約 1.0GB
+  16x16:
+    model:
+      conv_layers:
+        - { channels: 32, stride: 1 } # 16x16
+        - { channels: 32, stride: 2 } # 8x8
+        - { channels: 64, stride: 2 } # 4x4
+      hidden_layers: [256]
+    replay_capacity: 110000 # 約 8.9KB × 110000 = 約 980MB
 
 # --- 報酬 ---
 reward:
@@ -53,13 +95,15 @@ reward:
     score_ratio: 0.5 # 1 なら稼ぎをすべて打ち消す
     ramp_decisions: 1000000
 
-  # アイテムを取ったときの報酬
+  # アイテムを取ったときの報酬。スコアの増減と同じ大きさにして、勝ち負け (±50) より小さく抑える。
+  # 大きくすると、勝つことより伸びることを優先し、8x8 の盤面で長くなりすぎて衝突する動きになる。
+  # 毒リンゴはスコアが減るが短くなって生き残りやすくなるので、重い罰にはしない
   pickup:
-    normal_apple: 4.0
-    gold_apple: 10.0
-    poison_apple: -10.0
-    block_clear: 3.0 # ブロック消去
-    block_jam: 3.0 # お邪魔
+    normal_apple: 1.0
+    gold_apple: 3.0
+    poison_apple: -1.0
+    block_clear: 1.0 # ブロック消去
+    block_jam: 1.0 # お邪魔
 
   # 引力・斥力による報酬の補助 (学習時だけ使い、ゲームのルールには影響しない)。
   # リンゴ・毒リンゴ・お邪魔ブロックから頭に力が働いているとみなし、頭が1マス動くたびに力がした仕事を報酬に足す。
@@ -77,17 +121,20 @@ reward:
 # --- 学習 (自己対戦 Double DQN) ---
 train:
   num_envs: 64 # 同時に進める対戦数。1対戦ごとに2匹分の経験が得られ、推論もまとめて行う
-  learning_rate: 0.0005
+  learning_rate: 0.00025 # ネットワークを大きくしたので、学習を安定させるために下げる
   gamma: 0.99 # 1判断あたりの割引率
   n_step: 3
   batch_size: 128
-  replay_capacity: 200000 # 1遷移あたり約 8.9KB (16x16 盤面で 200000 なら約 1.8GB)
-  learning_starts: 10000 # リプレイにこの数の遷移が溜まるまで学習しない
+  # board_sizes に無い盤面サイズで使う。盤面サイズごとの値は board_sizes の replay_capacity に書く。
+  # 毎秒数千の遷移が入るので、小さいと直近の数十秒分しか残らず、同じ場面ばかり学習する
+  replay_capacity: 200000
+  learning_starts: 20000 # リプレイにこの数の遷移が溜まるまで学習しない
   transitions_per_update: 32 # 新しい遷移がこの数だけ溜まるごとに1回更新する
   target_update_interval: 1000 # ターゲットネットワークを同期する更新回数の間隔
   epsilon_start: 1.0
-  epsilon_end: 0.05
-  epsilon_decay_decisions: 1000000
+  # ランダム行動は衝突しやすく、0.05 では試合が序盤で終わってしまい、実際に負けが決まる長くなった終盤をほとんど学習できない
+  epsilon_end: 0.01
+  epsilon_decay_decisions: 2000000
   grad_clip_norm: 10.0
   log_interval_seconds: 30 # この秒数ごとに統計を log/train-*.log と .csv に書き出す
   save_interval_games: 10000

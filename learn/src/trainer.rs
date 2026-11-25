@@ -149,7 +149,7 @@ impl Trainer {
         tch::manual_seed(seed as i64);
         let mut rng = StdRng::seed_from_u64(seed);
         let rules = Rules::from_config(&config.game);
-        let spec = NetworkSpec::new(&config.model, &rules);
+        let spec = NetworkSpec::new(config.model(), &rules);
         let train = &config.train;
 
         let online_vs = nn::VarStore::new(device);
@@ -166,7 +166,7 @@ impl Trainer {
         let optimizer = nn::Adam::default().build(&online_vs, train.learning_rate)?;
 
         let grid_shape = [GRID_CHANNELS as i64, spec.height, spec.width];
-        let replay = ReplayBuffer::new(train.replay_capacity, grid_shape, VECTOR_FEATURES);
+        let replay = ReplayBuffer::new(config.replay_capacity(), grid_shape, VECTOR_FEATURES);
         let gamma = train.gamma as f32;
         let slots = (0..train.num_envs)
             .map(|_| Slot::new(rules, rng.gen(), train.n_step, gamma))

@@ -3,7 +3,7 @@ Human vs AI リアルタイム対戦型スネークゲーム。
 
 ## ディレクトリ構成
 - `learn/`: Rustによる自己対戦強化学習 (Double DQN) とゲームシミュレータ
-  - `config.yaml`: ゲームルール・ネットワーク構造・学習パラメータ
+  - `config.yaml`: ゲームルール・ネットワーク構造・学習パラメータ。ネットワーク構造とリプレイの容量は `board_sizes` で盤面サイズ (8x8・10x10・12x12・16x16) ごとに変えられる
   - `RULES.md`: ゲームルールと AI の入出力仕様 (Web 版もこれに従う)
   - `RUST_TUTORIAL.md`: learn/ のコードを教材にした Rust 入門 (文法・所有権・メモリ管理・強化学習の実装)
 - `model/`: 学習済みモデル (JSON)
@@ -28,6 +28,9 @@ just train-watch          # 学習中のログを表示し続ける (別の端�
 just versus               # 旧モデル (main のモデル) と新モデル (最新) を、両方そろう盤面すべてで対戦させて強さを比べる
 just test                 # ルールとモデル書き出しのテスト
 ```
+
+ネットワーク構造とリプレイの容量は、`learn/config.yaml` の `board_sizes` に `game.grid` と同じサイズの設定があればそれを使い、無ければ `model` と `train.replay_capacity` を使います。
+ネットワーク構造を変えた盤面サイズのモデルからは `just train-resume` で再開できないので、`just train` で新しく学習してください。
 
 盤面サイズは `learn/config.yaml` の `game.grid` で決まり、モデルは盤面サイズごとに `model/recent-model/snake-model-<幅>x<高さ>.json` に保存します。
 同じ盤面サイズのモデルがあれば上書きし、ほかの盤面サイズのモデルはそのまま残ります。
