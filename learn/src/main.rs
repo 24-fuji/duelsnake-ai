@@ -366,6 +366,15 @@ fn read_resume_model(
         )
         .into());
     }
+    if !model.uses_full_observation() {
+        return Err(format!(
+            "再開元モデル {} の観測 (盤面 {} チャネル / 状態 {} 個) が今の観測 ({GRID_CHANNELS} チャネル / {VECTOR_FEATURES} 個) と異なるので、学習を再開できません。`just train` で新しく学習してください (このモデルとは `just versus` で対戦できます)",
+            path.display(),
+            model.observation.grid_channels.len(),
+            model.observation.vector_features.len()
+        )
+        .into());
+    }
     notices.push(format!("学習を再開します: {}", path.display()));
     if model.game != config.game {
         notices.push("注意: 再開元モデルと config.yaml のゲームルールが異なります。現在の config.yaml のルールで学習を続けます".to_string());

@@ -25,14 +25,28 @@ pub struct DenseSpec {
 pub struct NetworkSpec {
     pub height: i64,
     pub width: i64,
+    /// 入力の盤面チャネル数と状態ベクトルの長さ。学習では観測のすべて、古いモデルではその先頭部分
+    pub grid_channels: i64,
+    pub vector_features: i64,
     pub conv: Vec<ConvSpec>,
     pub dense: Vec<DenseSpec>,
 }
 
 impl NetworkSpec {
+    /// 観測のすべてを入力にするネットワーク
     pub fn new(model: &ModelConfig, rules: &Rules) -> Self {
+        Self::with_inputs(model, rules, GRID_CHANNELS, VECTOR_FEATURES)
+    }
+
+    /// 観測の先頭の `grid_channels` チャネルと `vector_features` 個だけを入力にするネットワーク
+    pub fn with_inputs(
+        model: &ModelConfig,
+        rules: &Rules,
+        grid_channels: usize,
+        vector_features: usize,
+    ) -> Self {
         let (mut c, mut h, mut w) = (
-            GRID_CHANNELS as i64,
+            grid_channels as i64,
             rules.height as i64,
             rules.width as i64,
         );
@@ -52,7 +66,7 @@ impl NetworkSpec {
             })
             .collect();
 
-        let mut features = c * h * w + VECTOR_FEATURES as i64;
+        let mut features = c * h * w + vector_features as i64;
         let mut dense = Vec::new();
         for &units in model.hidden_layers.iter().chain([&(Action::COUNT as i64)]) {
             dense.push(DenseSpec {
@@ -65,6 +79,8 @@ impl NetworkSpec {
         Self {
             height: rules.height as i64,
             width: rules.width as i64,
+            grid_channels: grid_channels as i64,
+            vector_features: vector_features as i64,
             conv,
             dense,
         }

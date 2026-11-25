@@ -6,7 +6,13 @@ import modelFile from "../../../model/recent-model/snake-model-16x16.json";
 import { GameEnv, type Action } from "./game";
 import { rulesFromConfig, type GameRules, type Rules } from "./rules";
 import { manhattan, type Direction, type Position } from "./snake";
-import { encodeObservation } from "../ai/observation";
+import {
+  encodeObservation,
+  fullObservationLengths,
+  GRID_CHANNEL_NAMES,
+  inputSizes,
+  VECTOR_FEATURE_NAMES,
+} from "../ai/observation";
 import type { ObservationSpec } from "../ai/model";
 
 const baseRules = (): Rules => rulesFromConfig(modelFile.game as GameRules);
@@ -287,8 +293,8 @@ describe("観測", () => {
     env.fields[1].snake.heldItem = "block_jam";
 
     const plane = 16 * 16;
-    const grid = new Float32Array(9 * plane);
-    const vector = new Float32Array(13);
+    const grid = new Float32Array(17 * plane);
+    const vector = new Float32Array(22);
     encodeObservation(env, 0, spec, grid, vector);
     const at = (c: number, x: number, y: number) => grid[c * plane + y * 16 + x];
 
@@ -296,11 +302,68 @@ describe("観測", () => {
     expect(at(1, 8, 9)).toBe(1);
     expect(at(1, 8, 10)).toBe(0.5);
     expect(at(3, 2, 3)).toBe(1);
-    expect(grid.subarray(8 * plane).every((v) => v === 1)).toBe(true);
+    expect(grid.subarray(8 * plane, 9 * plane).every((v) => v === 1)).toBe(true);
     expect(Array.from(vector.subarray(0, 4))).toEqual([1, 0, 0, 0]);
     expect([vector[8], vector[9], vector[10], vector[11]]).toEqual([1, 1, 0.5, 1]);
 
     encodeObservation(env, 1, spec, grid, vector);
     expect([vector[10], vector[11]]).toEqual([-0.5, 0]);
+  });
+
+  it("相手のフィールドと状態も観測に入れる", () => {
+    const env = emptyEnv();
+    env.fields[1].items.push({ pos: pos(4, 5), kind: "poison_apple" });
+    env.fields[1].obstacles.push(pos(1, 1));
+    env.fields[1].snake.heldItem = "block_clear";
+    env.fields[1].snake.pendingGrowth = 2;
+    env.fields[1].snake.boostRemaining = 25;
+    env.fields[1].incomingJams.push(3);
+
+    const plane = 16 * 16;
+    const { grid: g, vector: v } = fullObservationLengths(env.rules);
+    const [grid0, grid1] = [new Float32Array(g), new Float32Array(g)];
+    const [vector0, vector1] = [new Float32Array(v), new Float32Array(v)];
+    encodeObservation(env, 0, spec, grid0, vector0);
+    encodeObservation(env, 1, spec, grid1, vector1);
+
+    // プレイヤー 0 から見た相手の 8 チャネル (9〜16) は、プレイヤー 1 から見た自分の 8 チャネル (0〜7) と同じ
+    expect(Array.from(grid0.subarray(9 * plane, 17 * plane))).toEqual(Array.from(grid1.subarray(0, 8 * plane)));
+    expect(grid0[(9 + 4) * plane + 5 * 16 + 4]).toBe(1);
+    expect(grid0[16 * plane + 16 + 1]).toBe(1);
+    expect(grid0.subarray(4 * plane, 5 * plane).every((x) => x === 0)).toBe(true);
+    expect(grid0.subarray(7 * plane, 8 * plane).every((x) => x === 0)).toBe(true);
+
+    // 相手の状態 (13〜21) は、相手から見た自分の状態と同じ値
+    expect(Array.from(vector0.subarray(13, 17))).toEqual(Array.from(vector1.subarray(0, 4)));
+    expect([vector0[17], vector0[18], vector0[19], vector0[20], vector0[21]]).toEqual([
+      vector1[4],
+      1,
+      vector1[7],
+      vector1[8],
+      vector1[12],
+    ]);
+    expect(vector0[19]).toBe(0.5);
+    expect(vector0[21]).toBeGreaterThan(0);
+  });
+
+  it("古いモデルの観測は今の観測の先頭部分として扱う", () => {
+    const withNames = (grid: readonly string[], vector: readonly string[]): ObservationSpec => ({
+      ...spec,
+      grid_channels: [...grid],
+      vector_features: [...vector],
+    });
+    // 相手の盤面を足す前の観測 (盤面 9 チャネル / 状態 13 個)
+    expect(inputSizes(withNames(GRID_CHANNEL_NAMES.slice(0, 9), VECTOR_FEATURE_NAMES.slice(0, 13)))).toEqual({
+      gridChannels: 9,
+      vectorFeatures: 13,
+    });
+    expect(inputSizes(withNames(GRID_CHANNEL_NAMES, VECTOR_FEATURE_NAMES))).toEqual({
+      gridChannels: 17,
+      vectorFeatures: 22,
+    });
+    const swapped = [...GRID_CHANNEL_NAMES.slice(0, 9)];
+    [swapped[0], swapped[1]] = [swapped[1], swapped[0]];
+    expect(inputSizes(withNames(swapped, VECTOR_FEATURE_NAMES.slice(0, 13)))).toBeNull();
+    expect(inputSizes(withNames(GRID_CHANNEL_NAMES, [...VECTOR_FEATURE_NAMES, "unknown"]))).toBeNull();
   });
 });

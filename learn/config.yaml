@@ -81,7 +81,7 @@ train:
   gamma: 0.99 # 1判断あたりの割引率
   n_step: 3
   batch_size: 128
-  replay_capacity: 200000 # 1遷移あたり約 4.7KB (16x16 盤面で 200000 なら約 0.95GB)
+  replay_capacity: 200000 # 1遷移あたり約 8.9KB (16x16 盤面で 200000 なら約 1.8GB)
   learning_starts: 10000 # リプレイにこの数の遷移が溜まるまで学習しない
   transitions_per_update: 32 # 新しい遷移がこの数だけ溜まるごとに1回更新する
   target_update_interval: 1000 # ターゲットネットワークを同期する更新回数の間隔

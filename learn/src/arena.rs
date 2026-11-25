@@ -55,6 +55,13 @@ impl Contender {
         let Some((_, hidden)) = model.network.dense.split_last() else {
             return Err(format!("モデル {} に全結合層がありません", path.display()).into());
         };
+        let Some((grid_channels, vector_features)) = model.input_sizes() else {
+            return Err(format!(
+                "モデル {} の観測の仕様がこのコードの観測と合わないので、対戦させられません",
+                path.display()
+            )
+            .into());
+        };
         let layers = ModelConfig {
             conv_layers: model
                 .network
@@ -67,7 +74,7 @@ impl Contender {
                 .collect(),
             hidden_layers: hidden.iter().map(|d| d.out_features).collect(),
         };
-        let spec = NetworkSpec::new(&layers, rules);
+        let spec = NetworkSpec::with_inputs(&layers, rules, grid_channels, vector_features);
         let vs = nn::VarStore::new(device);
         let mut net = QNetwork::new(&vs.root(), &spec);
         model
@@ -84,14 +91,40 @@ impl Contender {
         })
     }
 
+    /// 1局面あたりの入力の長さ (盤面, 状態ベクトル)。観測の先頭からこの長さだけを使う
+    fn input_lens(&self) -> (usize, usize) {
+        let s = &self.spec;
+        (
+            (s.grid_channels * s.height * s.width) as usize,
+            s.vector_features as usize,
+        )
+    }
+
+    /// 入力の説明 (例: 盤面 17 チャネル / 状態 22 個)
+    pub fn input_label(&self) -> String {
+        let s = &self.spec;
+        let note = if (s.grid_channels as usize, s.vector_features as usize)
+            == (GRID_CHANNELS, VECTOR_FEATURES)
+        {
+            ""
+        } else {
+            "、観測の先頭部分だけを使う古いモデル"
+        };
+        format!(
+            "入力: 盤面 {} チャネル / 状態 {} 個{note}",
+            s.grid_channels, s.vector_features
+        )
+    }
+
     /// 観測をまとめて推論し、Q 値が最大の行動を返す
     fn best_actions(&self, grids: &[f32], vectors: &[f32], device: Device) -> Vec<usize> {
-        let n = (vectors.len() / VECTOR_FEATURES) as i64;
+        let s = &self.spec;
+        let n = (vectors.len() as i64) / s.vector_features;
         let grid = Tensor::from_slice(grids)
-            .view([n, GRID_CHANNELS as i64, self.spec.height, self.spec.width])
+            .view([n, s.grid_channels, s.height, s.width])
             .to(device);
         let vector = Tensor::from_slice(vectors)
-            .view([n, VECTOR_FEATURES as i64])
+            .view([n, s.vector_features])
             .to(device);
         let best = tch::no_grad(|| self.net.forward(&grid, &vector).argmax(1, false));
         Vec::<i64>::try_from(best.to(Device::Cpu))
@@ -210,7 +243,8 @@ pub fn play(
     };
     let mut matches: Vec<Match> = (0..envs.max(1)).map_while(|_| schedule.next()).collect();
     let mut tally = Tally::default();
-    let (g, v) = (GRID_CHANNELS * rules.cell_count(), VECTOR_FEATURES);
+    let mut full_grid = vec![0.0; GRID_CHANNELS * rules.cell_count()];
+    let mut full_vector = vec![0.0; VECTOR_FEATURES];
     let (mut grids, mut vectors) = (Vec::new(), Vec::new());
     let mut status = StatusLine::new();
     let clock = Instant::now();
@@ -230,15 +264,14 @@ pub fn play(
             if requests.is_empty() {
                 continue;
             }
-            grids.resize(requests.len() * g, 0.0);
-            vectors.resize(requests.len() * v, 0.0);
-            for (k, &(m, p)) in requests.iter().enumerate() {
-                observation::encode(
-                    &matches[m].env,
-                    p,
-                    &mut grids[k * g..(k + 1) * g],
-                    &mut vectors[k * v..(k + 1) * v],
-                );
+            // 観測をすべて書いてから、このモデルが使う先頭部分だけを集める
+            let (cg, cv) = contender.input_lens();
+            grids.clear();
+            vectors.clear();
+            for &(m, p) in &requests {
+                observation::encode(&matches[m].env, p, &mut full_grid, &mut full_vector);
+                grids.extend_from_slice(&full_grid[..cg]);
+                vectors.extend_from_slice(&full_vector[..cv]);
             }
             let best = contender.best_actions(&grids, &vectors, device);
             for (&(m, p), a) in requests.iter().zip(best) {
@@ -288,10 +321,11 @@ pub fn report(contenders: &[Contender; CONTENDERS], tally: &Tally) -> Vec<String
     let mut lines = Vec::new();
     for (label, c) in LABELS.iter().zip(contenders) {
         lines.push(format!(
-            "{label}: {} (通算 {} 試合学習 / 書き出し {})",
+            "{label}: {} (通算 {} 試合学習 / 書き出し {} / {})",
             c.path.display(),
             thousands(c.training.games),
-            c.created_at
+            c.created_at,
+            c.input_label()
         ));
     }
     lines.push(format!(
@@ -399,6 +433,29 @@ mod tests {
         assert_eq!(play(&contenders, rules, 7, 3, 1, Device::Cpu), tally);
         let (rate, margin) = tally.new_win_rate();
         assert!((0.0..=1.0).contains(&rate) && margin >= 0.0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plays_old_model_that_sees_only_its_own_field() {
+        tch::manual_seed(5);
+        let config = config();
+        let dir = temp_dir();
+        let rules = Rules::from_config(&config.game);
+        // 相手の盤面を足す前の観測 (盤面 9 チャネル / 状態 13 個) で学習したモデル
+        let spec = NetworkSpec::with_inputs(&config.model, &rules, 9, 13);
+        let vs = nn::VarStore::new(Device::Cpu);
+        let net = QNetwork::new(&vs.root(), &spec);
+        let path = dir.join("legacy.json");
+        ModelFile::new(&config, &net, &spec, TrainingInfo::default())
+            .write(&path)
+            .unwrap();
+        let old = Contender::load(&path, &rules, Device::Cpu).unwrap();
+        assert!(old.input_label().contains("盤面 9 チャネル / 状態 13 個"));
+        let new = contender(&config, &dir, "new.json");
+
+        let tally = play(&[old, new], rules, 6, 4, 1, Device::Cpu);
+        assert_eq!(tally.games, 6);
         fs::remove_dir_all(dir).unwrap();
     }
 
