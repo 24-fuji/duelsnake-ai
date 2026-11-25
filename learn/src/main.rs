@@ -6,6 +6,7 @@ mod force;
 mod git;
 mod model;
 mod monitor;
+mod progress;
 mod replay;
 mod trainer;
 
@@ -16,17 +17,20 @@ use env::observation::{GRID_CHANNELS, VECTOR_FEATURES};
 use env::rules::Rules;
 use export::ModelFile;
 use monitor::{thousands, TrainLog};
+use progress::ProgressFiles;
 use replay::ReplayBuffer;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tch::Device;
-use trainer::{CommitPolicy, OutputPaths, Trainer};
+use trainer::{CommitPolicy, EvalTarget, OutputPaths, Trainer};
 
 const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
 /// 盤面サイズごとの最新モデルを置くフォルダ (<out_dir> の下)。Web アプリはここのモデルを使う
 const RECENT_DIR: &str = "recent-model";
+/// 学習の経過 (旧モデルとの対戦の勝率の CSV とグラフ) を置くフォルダ (リポジトリ直下から)
+const PROGRESS_DIR: &str = "docs/training";
 /// 旧モデルを置くフォルダ (<out_dir> の下)。新モデルとの対戦に使う
 const PREVIOUS_DIR: &str = "previous-model";
 /// 旧モデルを取り出すブランチと、そのブランチでの最新モデルのフォルダ (リポジトリ直下から)
@@ -145,6 +149,7 @@ fn set_threads(threads: Option<usize>) -> usize {
 
 fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let repo_dir = repo_dir();
+    let custom_out_dir = cli.out_dir.is_some();
     let (config_path, out_dir) = resolve_paths(cli.config, cli.out_dir);
 
     let mut config = Config::load(&config_path)?;
@@ -183,14 +188,58 @@ fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
 
+    let resuming = resume.is_some();
     let mut trainer = Trainer::new(config.clone(), device, seed, resume)?;
-    notices.push(match save_branch_model_as_previous(&out_dir, &model_file) {
-        Ok(path) => format!(
-            "{PREVIOUS_MODEL_BRANCH} ブランチのモデルを旧モデルとして置きました: {} (`just versus` で新モデルと対戦できます)",
-            path.display()
-        ),
-        Err(e) => format!("警告: 旧モデルを置けませんでした: {e}"),
-    });
+    let previous_model = match save_branch_model_as_previous(&out_dir, &model_file) {
+        Ok(path) => {
+            notices.push(format!(
+                "{PREVIOUS_MODEL_BRANCH} ブランチのモデルを旧モデルとして置きました: {} (`just versus` で新モデルと対戦できます)",
+                path.display()
+            ));
+            Some(path)
+        }
+        Err(e) => {
+            notices.push(format!("警告: 旧モデルを置けませんでした: {e}"));
+            None
+        }
+    };
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let eval = match previous_model {
+        _ if config.train.eval_games == 0 => {
+            notices.push("旧モデルとの対戦      : しない (train.eval_games が 0)".to_string());
+            None
+        }
+        None => {
+            notices.push(
+                "警告: 旧モデルが無いので、旧モデルとの対戦による勝率の記録はしません".to_string(),
+            );
+            None
+        }
+        Some(previous_model) => {
+            // 出力先を指定した試しの学習では、docs/ の記録を汚さないよう出力先の下に書く
+            let dir = if custom_out_dir {
+                out_dir.join("training-progress")
+            } else {
+                repo_dir.join(PROGRESS_DIR)
+            };
+            let progress = ProgressFiles::new(&dir, &size);
+            let resumed_games = resuming.then(|| trainer.info().games);
+            if let Some(message) = progress.prepare(resumed_games, &timestamp)? {
+                notices.push(message);
+            }
+            notices.push(format!(
+                "旧モデルとの対戦      : {} 試合ごとの保存のたびに {} 試合。勝率を {} に足し、{} のグラフを描き直す",
+                thousands(config.train.save_interval_games),
+                thousands(config.train.eval_games),
+                progress.csv.display(),
+                progress.png.display()
+            ));
+            Some(EvalTarget {
+                previous_model,
+                progress,
+            })
+        }
+    };
     let grid_len = GRID_CHANNELS * (config.game.grid.width * config.game.grid.height) as usize;
     let replay_mb = (config.replay_capacity()
         * ReplayBuffer::bytes_per_transition(grid_len, VECTOR_FEATURES)) as f64
@@ -198,7 +247,6 @@ fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let resumed = trainer.info();
     let force = &config.reward.force;
 
-    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let mut log = TrainLog::create(&repo_dir.join(format!("log/train-{timestamp}")))?;
     let mut lines = vec![
         "DuelSnake-AI 自己対戦学習".to_string(),
@@ -274,6 +322,7 @@ fn train(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let paths = OutputPaths {
         recent_model,
         backup_dir: out_dir.join("models"),
+        eval,
     };
     let commit = CommitPolicy {
         periodic: cli.auto_commit,

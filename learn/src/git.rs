@@ -3,14 +3,24 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-/// `file` だけを `message` でコミットし、今のブランチをプッシュする。
-/// ほかにステージしてある変更はコミットに含めない
-pub fn commit_and_push(file: &Path, message: &str) -> Result<(), String> {
-    let (Some(dir), Some(name)) = (file.parent(), file.file_name().and_then(|n| n.to_str())) else {
-        return Err(format!("{} はファイルのパスではありません", file.display()));
+/// `files` だけを `message` でコミットし、今のブランチをプッシュする。
+/// ほかにステージしてある変更はコミットに含めない。ファイルはすべて同じリポジトリの中にあること
+pub fn commit_and_push(files: &[&Path], message: &str) -> Result<(), String> {
+    let Some(dir) = files.first().and_then(|f| f.parent()) else {
+        return Err("コミットするファイルがありません".to_string());
     };
-    git(dir, &["add", "--", name])?;
-    git(dir, &["commit", "--only", "-m", message, "--", name])?;
+    // 実行するフォルダによらず同じファイルを指すよう、絶対パスにして渡す
+    let paths = files
+        .iter()
+        .map(|f| std::path::absolute(f).map(|p| p.to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("ファイルのパスを解決できません: {e}"))?;
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    git(dir, &[&["add", "--"][..], &paths].concat())?;
+    git(
+        dir,
+        &[&["commit", "--only", "-m", message, "--"][..], &paths].concat(),
+    )?;
     git(dir, &["push"])
 }
 
@@ -106,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    fn commits_only_the_model_and_pushes() {
+    fn commits_only_the_given_files_and_pushes() {
         let (remote, work) = repos();
         // 別にステージしてある変更はコミットに入らず、ステージされたまま残る
         fs::write(work.join("README"), "edited").unwrap();
@@ -114,12 +124,16 @@ mod tests {
         let model = work.join("model/snake-model-16x16.json");
         fs::write(&model, "{}").unwrap();
 
-        commit_and_push(&model, "model update").unwrap();
+        fs::create_dir_all(work.join("docs/training")).unwrap();
+        let graph = work.join("docs/training/winrate-16x16.png");
+        fs::write(&graph, "png").unwrap();
+
+        commit_and_push(&[&model, &graph], "model update").unwrap();
 
         let pushed = run(&remote, &["log", "-1", "--name-only", "--format=%s"]);
         assert_eq!(
             pushed.trim(),
-            "model update\n\nmodel/snake-model-16x16.json"
+            "model update\n\ndocs/training/winrate-16x16.png\nmodel/snake-model-16x16.json"
         );
         assert_eq!(
             run(&work, &["diff", "--cached", "--name-only"]).trim(),
@@ -151,7 +165,7 @@ mod tests {
     #[test]
     fn reports_failure_outside_a_repository() {
         let dir = std::env::temp_dir();
-        let err = commit_and_push(&dir.join("no-such-model.json"), "model update").unwrap_err();
+        let err = commit_and_push(&[&dir.join("no-such-model.json")], "model update").unwrap_err();
         assert!(err.starts_with("git add が失敗しました"), "{err}");
     }
 }

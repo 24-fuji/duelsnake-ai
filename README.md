@@ -10,6 +10,7 @@ Human vs AI リアルタイム対戦型スネークゲーム。
   - `recent-model/snake-model-<幅>x<高さ>.json`: 盤面サイズごとの最新モデル。Web アプリはここにある盤面サイズから選べる
   - `previous-model/snake-model-<幅>x<高さ>.json`: main ブランチにある最新モデル (旧モデル)。新モデルとの対戦に使う (git 管理外)
   - `models/`: 盤面サイズとタイムスタンプ付きのバックアップ (git 管理外)
+- `docs/training/`: モデル学習の見直しの説明 ([docs/training/README.md](docs/training/README.md)) と、旧モデルに対する勝率の推移のグラフ (`winrate-<幅>x<高さ>.png`)
 - `web/`: Vite + React + TypeScriptによるフロントエンドWebアプリ
   - `WEB_TUTORIAL.md`: web/ のコードを教材にした Web アプリ開発入門 (動く場所と通信・設計の選び方・React・Canvas・入力・AI 推論・テスト・公開)
   - `src/game/`: ゲームエンジン (learn と同じルール)
@@ -26,6 +27,7 @@ just train --commit-on-interrupt  # Ctrl+C で中断したら、保存した最�
 just train-resume         # 同じ盤面サイズの最新モデルから再開 (--commit-on-interrupt も使える)
 just train-watch          # 学習中のログを表示し続ける (別の端末で実行)
 just versus               # 旧モデル (main のモデル) と新モデル (最新) を、両方そろう盤面すべてで対戦させて強さを比べる
+just winrate-plot         # 学習中に記録した旧モデルとの勝率 (docs/training/*.csv) からグラフを描き直す
 just test                 # ルールとモデル書き出しのテスト
 ```
 
@@ -53,6 +55,15 @@ AI は自分の盤面と状態に加えて、相手の盤面と状態も見ま�
 - `log/train-<日時>.csv`: 同じ統計の表。グラフを描くときに使う
 
 ログの間隔は `learn/config.yaml` の `train.log_interval_seconds` で変えられます。
+
+### 学習の経過 (旧モデルとの勝率)
+
+学習中、1 万試合ごと (`train.save_interval_games`) にモデルを保存した直後に、そのモデルを旧モデル (main のモデル) と 1,000 試合 (`train.eval_games`) 対戦させます。
+結果は `docs/training/winrate-<幅>x<高さ>.csv` (git 管理外) に 1 行ずつ足し、同じ場所の `winrate-<幅>x<高さ>.png` のグラフを描き直します。グラフは git で管理し、自動コミットではモデルと一緒にコミットしてプッシュします。
+`just train` で新しく学習を始めると前の CSV を `docs/training/archive/` に移し、`just train-resume` では再開した時点より後の行を消してから続きを足します。
+グラフを描くには `python3` と matplotlib が要ります。描けなくても学習は続けます。
+`--out-dir` を指定した試しの学習では、`docs/` ではなく `<out_dir>/training-progress/` に書きます。
+グラフの読み方と、学習の設定をどう見直したかは [docs/training/README.md](docs/training/README.md) にまとめています。
 
 ### 旧モデルと新モデルの対戦
 

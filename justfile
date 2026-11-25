@@ -23,6 +23,15 @@ train-resume *ARGS:
 versus *ARGS:
     cargo run --release --manifest-path learn/Cargo.toml -- versus {{ARGS}}
 
+# docs/training/winrate-<幅>x<高さ>.csv (旧モデルとの対戦の勝率の記録) から、同じ名前の .png のグラフを描き直す
+winrate-plot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    files=(docs/training/winrate-*.csv)
+    [ ${#files[@]} -gt 0 ] || { echo "docs/training/ に勝率の記録 (winrate-*.csv) がありません" >&2; exit 1; }
+    for f in "${files[@]}"; do python3 learn/scripts/plot_winrate.py "$f" "${f%.csv}.png" && echo "描き直しました: ${f%.csv}.png"; done
+
 # 学習中の最新ログを表示し続ける (学習とは別の端末で実行する)
 train-watch:
     tail -n 20 -f "$(ls -t log/train-*.log | head -n 1)"

@@ -174,6 +174,8 @@ pub struct TrainConfig {
     pub grad_clip_norm: f64,
     pub log_interval_seconds: u64,
     pub save_interval_games: u64,
+    /// save_interval_games ごとにモデルを保存した直後、旧モデル (main のモデル) とこの試合数だけ対戦させて勝率を記録する。0 なら対戦しない
+    pub eval_games: u64,
     pub commit_interval_games: u64,
 }
 
