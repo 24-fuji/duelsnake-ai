@@ -372,7 +372,7 @@ fn observation_encodes_own_view() {
     assert_eq!(at(1, 8, 9), 1.0); // 首
     assert_eq!(at(1, 8, 10), 0.5); // 尻尾
     assert_eq!(at(3, 2, 3), 1.0);
-    assert_eq!(grid[8 * plane..].iter().sum::<f32>(), plane as f32);
+    assert_eq!(grid[8 * plane..9 * plane].iter().sum::<f32>(), plane as f32);
     assert_eq!(&vector[0..4], &[1.0, 0.0, 0.0, 0.0]);
     assert_eq!(vector[8], 1.0); // ブースト可能
     assert_eq!(vector[9], 1.0); // 残り時間
@@ -382,4 +382,75 @@ fn observation_encodes_own_view() {
     encode(&env, 1, &mut grid, &mut vector);
     assert_eq!(vector[10], -0.5);
     assert_eq!(vector[11], 0.0);
+}
+
+#[test]
+fn observation_includes_opponent_view() {
+    let mut env = empty_env();
+    env.fields[1].items.push(Item {
+        pos: pos(4, 5),
+        kind: ItemType::PoisonApple,
+    });
+    env.fields[1].obstacles.push(pos(1, 1));
+    env.fields[1].snake.held_item = Some(HeldItem::BlockClear);
+    env.fields[1].snake.pending_growth = 2;
+    env.fields[1].snake.boost_remaining = 25;
+    env.fields[1].incoming_jams.push(3);
+
+    let plane = 16 * 16;
+    let mut grid0 = vec![0.0; GRID_CHANNELS * plane];
+    let mut vector0 = vec![0.0; VECTOR_FEATURES];
+    let mut grid1 = grid0.clone();
+    let mut vector1 = vector0.clone();
+    encode(&env, 0, &mut grid0, &mut vector0);
+    encode(&env, 1, &mut grid1, &mut vector1);
+
+    // プレイヤー 0 から見た相手の 8 チャネル (9〜16) は、プレイヤー 1 から見た自分の 8 チャネル (0〜7) と同じ
+    assert_eq!(&grid0[9 * plane..17 * plane], &grid1[..8 * plane]);
+    assert_eq!(grid0[(9 + 4) * plane + 5 * 16 + 4], 1.0); // 相手の毒リンゴ
+    assert_eq!(grid0[16 * plane + 16 + 1], 1.0); // 相手のお邪魔ブロック
+                                                 // 自分のチャネルには相手の物が混ざらない
+    assert_eq!(grid0[4 * plane..5 * plane].iter().sum::<f32>(), 0.0);
+    assert_eq!(grid0[7 * plane..8 * plane].iter().sum::<f32>(), 0.0);
+
+    // 相手の状態 (13〜21) は、相手から見た自分の状態と同じ値
+    assert_eq!(&vector0[13..17], &vector1[0..4]); // 向き
+    assert_eq!(vector0[17], vector1[4]); // 伸びる予定
+    assert_eq!(vector0[18], 1.0); // 相手がブロック消去を所持
+    assert_eq!(vector0[19], vector1[7]); // ブーストの残り
+    assert_eq!(vector0[19], 0.5);
+    assert_eq!(vector0[20], vector1[8]); // ブースト可能
+    assert_eq!(vector0[21], vector1[12]); // 相手に向かっているお邪魔
+    assert!(vector0[21] > 0.0);
+}
+
+#[test]
+fn old_models_use_a_prefix_of_the_observation() {
+    use super::observation::{input_sizes, GRID_CHANNEL_NAMES, VECTOR_FEATURE_NAMES};
+    let names = |all: &[&str], n: usize| all[..n].iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // 相手の盤面を足す前の観測 (盤面 9 チャネル / 状態 13 個) は今の観測の先頭部分
+    assert_eq!(
+        input_sizes(
+            &names(&GRID_CHANNEL_NAMES, 9),
+            &names(&VECTOR_FEATURE_NAMES, 13)
+        ),
+        Some((9, 13))
+    );
+    assert_eq!(
+        input_sizes(
+            &names(&GRID_CHANNEL_NAMES, GRID_CHANNELS),
+            &names(&VECTOR_FEATURE_NAMES, VECTOR_FEATURES)
+        ),
+        Some((GRID_CHANNELS, VECTOR_FEATURES))
+    );
+    // 並びが違う・知らない名前がある観測は使えない
+    let mut swapped = names(&GRID_CHANNEL_NAMES, 9);
+    swapped.swap(0, 1);
+    assert_eq!(
+        input_sizes(&swapped, &names(&VECTOR_FEATURE_NAMES, 13)),
+        None
+    );
+    let mut unknown = names(&VECTOR_FEATURE_NAMES, VECTOR_FEATURES);
+    unknown.push("unknown".to_string());
+    assert_eq!(input_sizes(&names(&GRID_CHANNEL_NAMES, 9), &unknown), None);
 }

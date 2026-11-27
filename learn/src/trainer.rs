@@ -1,5 +1,6 @@
 //! 自己対戦 Double DQN。複数の対戦を同時に進め、両プレイヤーを同じネットワークで動かして両方の経験から学習する
 
+use crate::arena::{self, Contender, CONTENDERS, NEW, OLD};
 use crate::config::Config;
 use crate::env::game::{Action, EndReason, GameEnv, GameResult, NUM_PLAYERS};
 use crate::env::observation::{self, GRID_CHANNELS, VECTOR_FEATURES};
@@ -9,10 +10,11 @@ use crate::force::ForceField;
 use crate::git;
 use crate::model::{NetworkSpec, QNetwork};
 use crate::monitor::{approx_count, hms, thousands, StatsRow, StatusLine, TrainLog};
+use crate::progress::{EvalRow, ProgressFiles};
 use crate::replay::{NStepBuilder, Obs, ReplayBuffer};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tch::nn::OptimizerConfig;
@@ -20,6 +22,9 @@ use tch::{nn, Device, Kind, Reduction, Tensor};
 
 /// 自動コミットのコミットメッセージ
 const MODEL_COMMIT_MESSAGE: &str = "model update";
+
+/// 旧モデルとの対戦に使う乱数シード。毎回同じ盤面で対戦させ、勝率の推移に盤面の運が混ざらないようにする
+const EVAL_SEED: u64 = 20_261_126;
 
 /// 最新モデルを git にコミットしてプッシュするタイミング
 #[derive(Debug, Clone, Copy)]
@@ -33,6 +38,16 @@ pub struct CommitPolicy {
 pub struct OutputPaths {
     pub recent_model: PathBuf,
     pub backup_dir: PathBuf,
+    /// モデルを保存するたびに旧モデルと対戦させて記録する先。None なら対戦しない
+    pub eval: Option<EvalTarget>,
+}
+
+/// 旧モデルとの対戦による評価
+pub struct EvalTarget {
+    /// 旧モデル (main のモデル) の JSON
+    pub previous_model: PathBuf,
+    /// 勝率の記録 (CSV) とグラフ (PNG)
+    pub progress: ProgressFiles,
 }
 
 /// 1プレイヤー分の判断の流れ
@@ -43,6 +58,8 @@ struct Stream {
     reward: f32,
     /// この試合で引力・斥力から得た報酬の合計
     force_reward: f32,
+    /// この試合でアイテムを取って得た報酬の合計。死んだときの罰の大きさに使う
+    pickup_reward: f32,
     nstep: NStepBuilder,
 }
 
@@ -57,6 +74,7 @@ impl Slot {
             last: None,
             reward: 0.0,
             force_reward: 0.0,
+            pickup_reward: 0.0,
             nstep: NStepBuilder::new(n_step, gamma),
         };
         Self {
@@ -146,7 +164,7 @@ impl Trainer {
         tch::manual_seed(seed as i64);
         let mut rng = StdRng::seed_from_u64(seed);
         let rules = Rules::from_config(&config.game);
-        let spec = NetworkSpec::new(&config.model, &rules);
+        let spec = NetworkSpec::new(config.model(), &rules);
         let train = &config.train;
 
         let online_vs = nn::VarStore::new(device);
@@ -163,7 +181,7 @@ impl Trainer {
         let optimizer = nn::Adam::default().build(&online_vs, train.learning_rate)?;
 
         let grid_shape = [GRID_CHANNELS as i64, spec.height, spec.width];
-        let replay = ReplayBuffer::new(train.replay_capacity, grid_shape, VECTOR_FEATURES);
+        let replay = ReplayBuffer::new(config.replay_capacity(), grid_shape, VECTOR_FEATURES);
         let gamma = train.gamma as f32;
         let slots = (0..train.num_envs)
             .map(|_| Slot::new(rules, rng.gen(), train.n_step, gamma))
@@ -238,7 +256,8 @@ impl Trainer {
             }
             let crossed = |interval: u64| self.info.games / interval > games_before / interval;
             let commit_due = commit.periodic && crossed(commit_interval);
-            if crossed(save_interval) || commit_due {
+            let save_due = crossed(save_interval);
+            if save_due || commit_due {
                 self.save(&paths.recent_model)?;
                 let message = format!(
                     "途中経過を保存しました ({} 試合): {}",
@@ -247,6 +266,13 @@ impl Trainer {
                 );
                 status.message(&message);
                 log.event(&message)?;
+            }
+            // 保存した直後のモデルを旧モデルと対戦させる。コミットするグラフに今回の結果も入るよう、コミットより先に行う
+            if let Some(eval) = paths.eval.as_ref().filter(|_| save_due) {
+                for message in self.evaluate(&paths.recent_model, eval) {
+                    status.message(&message);
+                    log.event(&message)?;
+                }
             }
             if commit_due {
                 let message = self.commit_recent_model(paths);
@@ -300,15 +326,91 @@ impl Trainer {
         Ok(())
     }
 
-    /// 最新モデルを git にコミットしてプッシュし、結果を知らせる文を返す。失敗しても学習は止めない
+    /// 最新モデルと勝率のグラフ (あれば) を git にコミットしてプッシュし、結果を知らせる文を返す。失敗しても学習は止めない
     fn commit_recent_model(&self, paths: &OutputPaths) -> String {
-        match git::commit_and_push(&paths.recent_model, MODEL_COMMIT_MESSAGE) {
+        let mut files = vec![paths.recent_model.as_path()];
+        let graph = paths
+            .eval
+            .as_ref()
+            .map(|e| e.progress.png.as_path())
+            .filter(|png| png.exists());
+        files.extend(graph);
+        match git::commit_and_push(&files, MODEL_COMMIT_MESSAGE) {
             Ok(()) => format!(
-                "最新モデルをコミットしてプッシュしました ({} 試合)",
+                "最新モデル{}をコミットしてプッシュしました ({} 試合)",
+                if graph.is_some() {
+                    "と勝率のグラフ"
+                } else {
+                    ""
+                },
                 thousands(self.info.games)
             ),
             Err(e) => format!("警告: 最新モデルをコミット・プッシュできませんでした: {e}"),
         }
+    }
+
+    /// 保存した最新モデル `recent` を旧モデルと対戦させ、結果を CSV に足してグラフを描き直す。
+    /// 返すのはログに残す文。失敗しても学習は止めない
+    fn evaluate(&self, recent: &Path, eval: &EvalTarget) -> Vec<String> {
+        let games = self.config.train.eval_games;
+        let load = |path: &Path| Contender::load(path, &self.rules, self.device);
+        let contenders: [Contender; CONTENDERS] = match (load(&eval.previous_model), load(recent)) {
+            (Ok(old), Ok(new)) => [old, new],
+            (Err(e), _) | (_, Err(e)) => {
+                return vec![format!("警告: 旧モデルとの対戦をやめました: {e}")]
+            }
+        };
+        let started = Instant::now();
+        let envs = self.config.train.num_envs;
+        let tally = arena::play(&contenders, self.rules, games, envs, EVAL_SEED, self.device);
+        let (rate, margin) = tally.new_win_rate();
+        let n = tally.games.max(1) as f64;
+        let old = &contenders[OLD];
+        let row = EvalRow {
+            time: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            games: self.info.games,
+            decisions: self.info.decisions,
+            updates: self.info.updates,
+            epsilon: self.epsilon(),
+            eval_games: tally.games,
+            new_wins: tally.wins[NEW],
+            old_wins: tally.wins[OLD],
+            draws: tally.draws,
+            win_rate: rate,
+            win_rate_ci95: margin,
+            new_avg_score: tally.score_sum[NEW] as f64 / n,
+            old_avg_score: tally.score_sum[OLD] as f64 / n,
+            new_death_rate: tally.deaths[NEW] as f64 / n,
+            old_death_rate: tally.deaths[OLD] as f64 / n,
+            avg_ticks: tally.ticks_sum as f64 / n,
+            old_model_games: old.training.games,
+            old_model_created_at: old.created_at.clone(),
+        };
+        let mut messages = vec![format!(
+            "旧モデルと {} 試合対戦しました ({} 試合時点, {}): 新モデルの勝率 {:.1}% ± {:.1}% / 衝突した試合 新 {:.1}% 旧 {:.1}%",
+            thousands(tally.games),
+            thousands(self.info.games),
+            hms(started.elapsed()),
+            rate * 100.0,
+            margin * 100.0,
+            row.new_death_rate * 100.0,
+            row.old_death_rate * 100.0
+        )];
+        if let Err(e) = eval.progress.append(&row) {
+            messages.push(format!(
+                "警告: 勝率の記録を {} に書けませんでした: {e}",
+                eval.progress.csv.display()
+            ));
+            return messages;
+        }
+        match eval.progress.plot() {
+            Ok(()) => messages.push(format!(
+                "勝率のグラフを描き直しました: {}",
+                eval.progress.png.display()
+            )),
+            Err(e) => messages.push(format!("警告: {e}")),
+        }
+        messages
     }
 
     /// 最下行に出す状況。試合数は同時対戦の都合で端数が意味を持たないので概数にする
@@ -397,7 +499,9 @@ impl Trainer {
             for (p, stream) in slot.streams.iter_mut().enumerate() {
                 let field = &slot.env.fields[p];
                 if let Some(kind) = field.eaten {
-                    stream.reward += reward_cfg.pickup.reward(kind);
+                    let pickup = reward_cfg.pickup.reward(kind);
+                    stream.reward += pickup;
+                    stream.pickup_reward += pickup;
                 }
                 if let Some(before) = &before {
                     let (head, items, obstacles) = &before[p];
@@ -416,6 +520,11 @@ impl Trainer {
                     Some(_) => reward_cfg.lose,
                     None => reward_cfg.draw,
                 };
+                if !slot.env.fields[p].snake.alive {
+                    stream.reward += reward_cfg
+                        .death_penalty
+                        .penalty(stream.pickup_reward, self.info.decisions);
+                }
                 if let Some((obs, action)) = stream.last.take() {
                     self.since_update +=
                         stream

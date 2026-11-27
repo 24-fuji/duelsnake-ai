@@ -1,7 +1,7 @@
 import type { Action, GameEnv } from "../game/game";
 import { rulesFromConfig } from "../game/rules";
 import type { SnakeModel } from "./model";
-import { checkObservationSpec, encodeObservation } from "./observation";
+import { checkObservationSpec, encodeObservation, fullObservationLengths } from "./observation";
 
 export interface Decision {
   action: Action;
@@ -20,20 +20,27 @@ export function assertModelCompatible(model: SnakeModel): void {
 export class AiPlayer {
   private readonly model: SnakeModel;
   private readonly randomActionRate: number;
+  /** 観測全体を書く配列 */
   private readonly grid: Float32Array;
   private readonly vector: Float32Array;
+  /** grid・vector のうちモデルに渡す先頭部分 (古いモデルは相手の盤面・状態を使わない) */
+  private readonly gridInput: Float32Array;
+  private readonly vectorInput: Float32Array;
 
   constructor(model: SnakeModel, randomActionRate: number) {
     this.model = model;
     this.randomActionRate = randomActionRate;
-    this.grid = new Float32Array(model.gridLength);
-    this.vector = new Float32Array(model.vectorLength);
+    const full = fullObservationLengths(rulesFromConfig(model.info.game));
+    this.grid = new Float32Array(full.grid);
+    this.vector = new Float32Array(full.vector);
+    this.gridInput = this.grid.subarray(0, model.gridLength);
+    this.vectorInput = this.vector.subarray(0, model.vectorLength);
   }
 
   /** 行動を決める。env.needsDecision(player) が true のティックで呼ぶ */
   decide(env: GameEnv, player: number): Decision {
     encodeObservation(env, player, this.model.info.observation, this.grid, this.vector);
-    const qValues = this.model.predict(this.grid, this.vector);
+    const qValues = this.model.predict(this.gridInput, this.vectorInput);
     const actions = this.model.info.actions;
 
     if (Math.random() < this.randomActionRate) {

@@ -3,8 +3,8 @@
 use crate::config::{Config, DifficultyConfig, GameConfig, GridConfig};
 use crate::env::game::Action;
 use crate::env::observation::{
-    GRID_CHANNEL_NAMES, INCOMING_JAMS_SCALE, PENDING_GROWTH_SCALE, SCORE_DIFF_SCALE,
-    VECTOR_FEATURE_NAMES,
+    input_sizes, GRID_CHANNELS, GRID_CHANNEL_NAMES, INCOMING_JAMS_SCALE, PENDING_GROWTH_SCALE,
+    SCORE_DIFF_SCALE, VECTOR_FEATURES, VECTOR_FEATURE_NAMES,
 };
 use crate::model::{NetworkSpec, QNetwork, KERNEL_SIZE, PADDING};
 use serde::ser::Error as _;
@@ -151,10 +151,16 @@ impl ModelFile {
             training,
             game: config.game.clone(),
             observation: ObservationSpec {
-                grid_channels: GRID_CHANNEL_NAMES.iter().map(|s| s.to_string()).collect(),
+                grid_channels: GRID_CHANNEL_NAMES[..spec.grid_channels as usize]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
                 grid_height: spec.height,
                 grid_width: spec.width,
-                vector_features: VECTOR_FEATURE_NAMES.iter().map(|s| s.to_string()).collect(),
+                vector_features: VECTOR_FEATURE_NAMES[..spec.vector_features as usize]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
                 pending_growth_scale: PENDING_GROWTH_SCALE,
                 score_diff_scale: SCORE_DIFF_SCALE,
                 incoming_jams_scale: INCOMING_JAMS_SCALE,
@@ -191,18 +197,30 @@ impl ModelFile {
         Ok(())
     }
 
+    /// このモデルの入力 (盤面チャネル数, 状態ベクトルの長さ)。観測の名前が今の観測の先頭部分と一致しなければ None
+    pub fn input_sizes(&self) -> Option<(usize, usize)> {
+        input_sizes(
+            &self.observation.grid_channels,
+            &self.observation.vector_features,
+        )
+    }
+
+    /// 観測のすべてを入力にするモデルか (学習を再開できるか)
+    pub fn uses_full_observation(&self) -> bool {
+        self.input_sizes() == Some((GRID_CHANNELS, VECTOR_FEATURES))
+    }
+
     /// 現在の設定・観測仕様と互換性があるか確認し、重みをネットワークに読み込む
     pub fn load_into(&self, net: &mut QNetwork, spec: &NetworkSpec) -> Result<(), String> {
-        let same_names = |names: &[String], expected: &[&str]| {
-            names
-                .iter()
-                .map(String::as_str)
-                .eq(expected.iter().copied())
-        };
-        if !same_names(&self.observation.grid_channels, &GRID_CHANNEL_NAMES)
-            || !same_names(&self.observation.vector_features, &VECTOR_FEATURE_NAMES)
-        {
-            return Err("モデルの観測仕様が現在のコードと一致しません".into());
+        let inputs = (spec.grid_channels as usize, spec.vector_features as usize);
+        if self.input_sizes() != Some(inputs) {
+            return Err(format!(
+                "モデルの観測 (盤面 {} チャネル / 状態 {} 個) がネットワークの入力 (盤面 {} チャネル / 状態 {} 個) と一致しません",
+                self.observation.grid_channels.len(),
+                self.observation.vector_features.len(),
+                inputs.0,
+                inputs.1
+            ));
         }
         let shapes_match =
             self.network.conv.len() == spec.conv.len()
@@ -258,7 +276,6 @@ impl ModelFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::observation::{GRID_CHANNELS, VECTOR_FEATURES};
     use crate::env::rules::Rules;
     use tch::{nn, Device, Kind};
 
@@ -409,6 +426,29 @@ mod tests {
         ] {
             assert_eq!(size_from_file_name(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn old_observation_model_round_trips_but_cannot_resume() {
+        tch::manual_seed(6);
+        let config = config();
+        let rules = Rules::from_config(&config.game);
+        // 相手の盤面を足す前の観測 (盤面 9 チャネル / 状態 13 個) のモデル
+        let spec = NetworkSpec::with_inputs(&config.model, &rules, 9, 13);
+        let vs = nn::VarStore::new(Device::Cpu);
+        let net = QNetwork::new(&vs.root(), &spec);
+        let model = ModelFile::new(&config, &net, &spec, TrainingInfo::default());
+        assert_eq!(model.observation.grid_channels.len(), 9);
+        assert_eq!(model.observation.vector_features.len(), 13);
+        assert_eq!(model.input_sizes(), Some((9, 13)));
+        assert!(!model.uses_full_observation());
+
+        let vs2 = nn::VarStore::new(Device::Cpu);
+        let mut net2 = QNetwork::new(&vs2.root(), &spec);
+        model.load_into(&mut net2, &spec).unwrap();
+        // 観測のすべてを入力にするネットワーク (学習用) には読み込めない
+        let (_vs3, mut net3, full) = build(&config);
+        assert!(model.load_into(&mut net3, &full).is_err());
     }
 
     #[test]

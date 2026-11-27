@@ -7,3 +7,7 @@ target
 Cargo.lock
 node_modules
 dist
+model/previous-model
+# 学習の経過の元データ (グラフの PNG は git で管理する)
+docs/training/*.csv
+docs/training/archive

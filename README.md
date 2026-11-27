@@ -3,12 +3,14 @@ Human vs AI リアルタイム対戦型スネークゲーム。
 
 ## ディレクトリ構成
 - `learn/`: Rustによる自己対戦強化学習 (Double DQN) とゲームシミュレータ
-  - `config.yaml`: ゲームルール・ネットワーク構造・学習パラメータ
+  - `config.yaml`: ゲームルール・ネットワーク構造・学習パラメータ。ネットワーク構造とリプレイの容量は `board_sizes` で盤面サイズ (8x8・10x10・12x12・16x16) ごとに変えられる
   - `RULES.md`: ゲームルールと AI の入出力仕様 (Web 版もこれに従う)
   - `RUST_TUTORIAL.md`: learn/ のコードを教材にした Rust 入門 (文法・所有権・メモリ管理・強化学習の実装)
 - `model/`: 学習済みモデル (JSON)
   - `recent-model/snake-model-<幅>x<高さ>.json`: 盤面サイズごとの最新モデル。Web アプリはここにある盤面サイズから選べる
+  - `previous-model/snake-model-<幅>x<高さ>.json`: main ブランチにある最新モデル (旧モデル)。新モデルとの対戦に使う (git 管理外)
   - `models/`: 盤面サイズとタイムスタンプ付きのバックアップ (git 管理外)
+- `docs/training/`: モデル学習の見直しの説明 ([docs/training/README.md](docs/training/README.md)) と、旧モデルに対する勝率の推移のグラフ (`winrate-<幅>x<高さ>.png`)
 - `web/`: Vite + React + TypeScriptによるフロントエンドWebアプリ
   - `WEB_TUTORIAL.md`: web/ のコードを教材にした Web アプリ開発入門 (動く場所と通信・設計の選び方・React・Canvas・入力・AI 推論・テスト・公開)
   - `src/game/`: ゲームエンジン (learn と同じルール)
@@ -24,12 +26,18 @@ just train --games 50000  # 指定した試合数で終了
 just train --commit-on-interrupt  # Ctrl+C で中断したら、保存した最新モデルをコミットしてプッシュする
 just train-resume         # 同じ盤面サイズの最新モデルから再開 (--commit-on-interrupt も使える)
 just train-watch          # 学習中のログを表示し続ける (別の端末で実行)
+just versus               # 旧モデル (main のモデル) と新モデル (最新) を、両方そろう盤面すべてで対戦させて強さを比べる
+just winrate-plot         # 学習中に記録した旧モデルとの勝率 (docs/training/*.csv) からグラフを描き直す
 just test                 # ルールとモデル書き出しのテスト
 ```
+
+ネットワーク構造とリプレイの容量は、`learn/config.yaml` の `board_sizes` に `game.grid` と同じサイズの設定があればそれを使い、無ければ `model` と `train.replay_capacity` を使います。
+ネットワーク構造を変えた盤面サイズのモデルからは `just train-resume` で再開できないので、`just train` で新しく学習してください。
 
 盤面サイズは `learn/config.yaml` の `game.grid` で決まり、モデルは盤面サイズごとに `model/recent-model/snake-model-<幅>x<高さ>.json` に保存します。
 同じ盤面サイズのモデルがあれば上書きし、ほかの盤面サイズのモデルはそのまま残ります。
 `just train-resume` は config.yaml と同じ盤面サイズのモデルから再開し、そのモデルが無ければ警告を出して新しく学習を始めます。
+AI は自分の盤面と状態に加えて、相手の盤面と状態も見ます。相手の分を足す前の古い観測のモデルからは再開できないので、`just train` で新しく学習してください (Web アプリと `just versus` では古いモデルもそのまま使えます)。
 
 `just train` と `just train-resume` は、モデルの通算試合数が 10 万の倍数を越えるごとに、最新モデルを保存して `model update` というメッセージで git にコミットし、プッシュします。
 `--commit-on-interrupt` を付けると、Ctrl+C で中断して保存したあとにも同じようにコミットしてプッシュします (`--games` で指定した試合数を終えて止まったときはコミットしません)。
@@ -47,6 +55,43 @@ just test                 # ルールとモデル書き出しのテスト
 - `log/train-<日時>.csv`: 同じ統計の表。グラフを描くときに使う
 
 ログの間隔は `learn/config.yaml` の `train.log_interval_seconds` で変えられます。
+
+### 学習の経過 (旧モデルとの勝率)
+
+学習中、1 万試合ごと (`train.save_interval_games`) にモデルを保存した直後に、そのモデルを旧モデル (main のモデル) と 1,000 試合 (`train.eval_games`) 対戦させます。
+結果は `docs/training/winrate-<幅>x<高さ>.csv` (git 管理外) に 1 行ずつ足し、同じ場所の `winrate-<幅>x<高さ>.png` のグラフを描き直します。グラフは git で管理し、自動コミットではモデルと一緒にコミットしてプッシュします。
+`just train` で新しく学習を始めると前の CSV を `docs/training/archive/` に移し、`just train-resume` では再開した時点より後の行を消してから続きを足します。
+グラフを描くには `python3` と matplotlib が要ります。描けなくても学習は続けます。
+`--out-dir` を指定した試しの学習では、`docs/` ではなく `<out_dir>/training-progress/` に書きます。
+グラフの読み方と、学習の設定をどう見直したかは [docs/training/README.md](docs/training/README.md) にまとめています。
+
+### 旧モデルと新モデルの対戦
+
+旧モデルは、いつも main ブランチにある同じ盤面サイズの最新モデル (`model/recent-model/snake-model-<幅>x<高さ>.json`) です。
+作業中のブランチでモデルを何度コミットしても、旧モデルは main のモデルのままです。
+`just train`・`just train-resume`・`just versus` を始めるたびに、main のモデルを git から取り出して `model/previous-model/snake-model-<幅>x<高さ>.json` に置き直します。
+使うのは手元の `main` ブランチなので、GitHub で main を更新したときは `git fetch origin main:main` などで手元の main も更新してください。
+main にその盤面サイズのモデルが無いときは、学習は警告を出して続け、`just versus` はエラーで止まります (`--old` で比べる相手を指定すれば対戦できます)。
+
+`just versus` は、旧モデルと最新モデル (新モデル) を AI 同士で対戦させ、どれだけ強くなったかを表示します。
+何も指定しなければ、旧モデル (main) と新モデル (`model/recent-model/`) の両方がそろう盤面すべてで 1000 試合ずつ対戦し、最後に盤面ごとの勝ち・負け・引き分けと勝率を表にまとめます。
+片方にしか無い盤面は、対戦せずにそのことを表示します。
+
+```sh
+just versus                     # ペアがそろう盤面すべてで 1000 試合ずつ
+just versus --size 8-8          # 幅 8・高さ 8 の盤面だけで 1000 試合 (--size 8 でもよい)
+just versus --games 4000        # 1つの盤面での試合数を変える (多いほど勝率の幅が狭まる)
+just versus --old model/models/snake-model-16x16-<日時>.json  # 旧モデルの代わりにバックアップと比べる (その盤面だけ)
+just versus --old <JSON> --new <JSON>                         # 任意の2つのモデルを比べる
+```
+
+- ゲームルールは `learn/config.yaml` に従い、盤面の大きさだけを対戦する盤面に合わせます。モデルを学習したときのルールと違えば注意を出します。
+- どちらのモデルも常に Q 値が最大の行動を取ります (ランダムな行動はしません)。
+- 同じ盤面で先手と後手を入れ替えて 2 試合ずつ行い、盤面の運とプレイヤー番号による偏りを打ち消します。
+- ネットワークの層の構成はモデルのファイルから読むので、`model` の設定を変える前のモデルとも比べられます。
+  相手の盤面を見ない古い観測のモデルとも比べられます ([learn/RULES.md](learn/RULES.md) の 10 章)。
+- 新モデルの勝率 (引き分けは 0.5 勝) とその 95% 信頼区間、勝ち方の内訳、平均スコアなどを表示し、同じ内容を `log/versus-<日時>.txt` に残します。
+  信頼区間が 50% をまたがなければ、どちらが強いかを判定として表示します。
 
 ## Web アプリ
 公開版: https://24-fuji.github.io/duelsnake-ai/
