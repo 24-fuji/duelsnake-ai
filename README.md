@@ -10,7 +10,7 @@ Human vs AI リアルタイム対戦型スネークゲーム。
   - `recent-model/snake-model-<幅>x<高さ>.json`: 盤面サイズごとの最新モデル。Web アプリはここにある盤面サイズから選べる
   - `previous-model/snake-model-<幅>x<高さ>.json`: main ブランチにある最新モデル (旧モデル)。新モデルとの対戦に使う (git 管理外)
   - `models/`: 盤面サイズとタイムスタンプ付きのバックアップ (git 管理外)
-- `docs/training/`: モデル学習の見直しの説明 ([docs/training/README.md](docs/training/README.md)) と、旧モデルに対する勝率の推移のグラフ (`winrate-<幅>x<高さ>.png`)
+- `docs/training/`: モデル学習の見直しの説明 ([docs/training/README.md](docs/training/README.md)) と、旧モデルに対する勝率の推移のグラフ (`winrate-<幅>x<高さ>.png`)、終盤の戦い方を良くするための提案 ([docs/training/endgame.md](docs/training/endgame.md))
 - `web/`: Vite + React + TypeScriptによるフロントエンドWebアプリ
   - `WEB_TUTORIAL.md`: web/ のコードを教材にした Web アプリ開発入門 (動く場所と通信・設計の選び方・React・Canvas・入力・AI 推論・テスト・公開)
   - `src/game/`: ゲームエンジン (learn と同じルール)
