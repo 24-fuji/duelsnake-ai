@@ -10,6 +10,7 @@ use crate::env::rules::Rules;
 use crate::export::{self, ModelFile, TrainingInfo};
 use crate::model::{NetworkSpec, QNetwork};
 use crate::monitor::{hms, thousands, StatusLine};
+use crate::trap::{self, DeathKind, Snapshot};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::path::{Path, PathBuf};
@@ -140,6 +141,8 @@ struct Match {
     env: GameEnv,
     /// seats[p] はプレイヤー p を動かすモデル (OLD か NEW)
     seats: [usize; NUM_PLAYERS],
+    /// history[p] はプレイヤー p が行動を決めたときの様子 (古い順)。死に方を分析するときだけ記録する
+    history: [Vec<Snapshot>; NUM_PLAYERS],
 }
 
 /// 対戦結果の集計。添字はモデル (OLD / NEW)
@@ -151,9 +154,28 @@ pub struct Tally {
     /// 勝ったときの決着の仕方 [盤面を埋めた, 相手が衝突した, 時間切れ]
     pub win_reasons: [[u64; 3]; CONTENDERS],
     pub deaths: [u64; CONTENDERS],
+    /// 衝突したもの [壁, 自分の体, お邪魔ブロック]
+    pub death_causes: [[u64; 3]; CONTENDERS],
+    /// 衝突したときの長さの合計
+    pub death_length_sum: [u64; CONTENDERS],
+    /// 死に方 [うっかり, 詰み, 判定できず]。`play` で死に方を分析したときだけ数える
+    pub death_kinds: [[u64; 3]; CONTENDERS],
+    /// 詰みに入ったのが何手前か [1, 2〜5, 6〜10, 11 以上]
+    pub trap_moves: [[u64; 4]; CONTENDERS],
+    pub trap_moves_sum: [u64; CONTENDERS],
     pub score_sum: [i64; CONTENDERS],
     pub length_sum: [u64; CONTENDERS],
     pub ticks_sum: u64,
+}
+
+/// 詰みに入ったのが何手前かの区切り (`Tally::trap_moves` の添字)
+fn trap_bucket(moves: u32) -> usize {
+    match moves {
+        0..=1 => 0,
+        2..=5 => 1,
+        6..=10 => 2,
+        _ => 3,
+    }
 }
 
 fn reason_index(reason: EndReason) -> usize {
@@ -165,7 +187,7 @@ fn reason_index(reason: EndReason) -> usize {
 }
 
 impl Tally {
-    fn record(&mut self, game: &Match, result: GameResult) {
+    fn record(&mut self, game: &Match, result: GameResult, analyze_deaths: bool) {
         self.games += 1;
         self.ticks_sum += game.env.tick as u64;
         match result.winner {
@@ -176,10 +198,28 @@ impl Tally {
             }
             None => self.draws += 1,
         }
-        for (field, &c) in game.env.fields.iter().zip(&game.seats) {
-            self.deaths[c] += (!field.snake.alive) as u64;
+        let rules = game.env.rules();
+        for (p, (field, &c)) in game.env.fields.iter().zip(&game.seats).enumerate() {
             self.score_sum[c] += field.snake.score as i64;
             self.length_sum[c] += field.snake.len() as u64;
+            if field.snake.alive {
+                continue;
+            }
+            self.deaths[c] += 1;
+            self.death_causes[c][trap::death_cause(field, rules).index()] += 1;
+            self.death_length_sum[c] += field.snake.len() as u64;
+            if !analyze_deaths {
+                continue;
+            }
+            match trap::classify(&game.history[p], rules.width, rules.height) {
+                DeathKind::Blunder => self.death_kinds[c][0] += 1,
+                DeathKind::Trapped { moves } => {
+                    self.death_kinds[c][1] += 1;
+                    self.trap_moves[c][trap_bucket(moves)] += 1;
+                    self.trap_moves_sum[c] += moves as u64;
+                }
+                DeathKind::Unknown => self.death_kinds[c][2] += 1,
+            }
         }
     }
 
@@ -220,12 +260,14 @@ impl Schedule {
         Some(Match {
             env: GameEnv::new(self.rules, self.pair_seed),
             seats,
+            history: Default::default(),
         })
     }
 }
 
 /// 旧モデル (contenders[OLD]) と新モデル (contenders[NEW]) を `games` 試合対戦させる。
-/// `envs` 試合ずつ同時に進めて推論をまとめる
+/// `envs` 試合ずつ同時に進めて推論をまとめる。
+/// `analyze_deaths` なら、衝突した試合がうっかりか詰みかも調べる (行動を決めるたびにフィールドの様子を取っておく)
 pub fn play(
     contenders: &[Contender; CONTENDERS],
     rules: Rules,
@@ -233,6 +275,7 @@ pub fn play(
     envs: usize,
     seed: u64,
     device: Device,
+    analyze_deaths: bool,
 ) -> Tally {
     let mut schedule = Schedule {
         rng: StdRng::seed_from_u64(seed),
@@ -269,6 +312,10 @@ pub fn play(
             grids.clear();
             vectors.clear();
             for &(m, p) in &requests {
+                if analyze_deaths {
+                    let snapshot = Snapshot::of(&matches[m].env.fields[p]);
+                    matches[m].history[p].push(snapshot);
+                }
                 observation::encode(&matches[m].env, p, &mut full_grid, &mut full_vector);
                 grids.extend_from_slice(&full_grid[..cg]);
                 vectors.extend_from_slice(&full_vector[..cv]);
@@ -289,7 +336,7 @@ pub fn play(
                 m += 1;
                 continue;
             };
-            tally.record(&matches[m], result);
+            tally.record(&matches[m], result, analyze_deaths);
             match schedule.next() {
                 Some(game) => {
                     matches[m] = game;
@@ -376,6 +423,66 @@ pub fn report(contenders: &[Contender; CONTENDERS], tally: &Tally) -> Vec<String
         "  平均試合時間: {:.1} ティック",
         tally.ticks_sum as f64 / n
     ));
+    lines.extend(death_report(tally));
+    lines
+}
+
+/// 衝突した試合の内訳 (何に衝突したか、うっかりか詰みか、何手前に詰みに入ったか)
+fn death_report(tally: &Tally) -> Vec<String> {
+    let mut lines = Vec::new();
+    let analyzed = tally.death_kinds.iter().flatten().sum::<u64>() > 0;
+    if tally.deaths.iter().sum::<u64>() == 0 {
+        return lines;
+    }
+    lines.push("衝突した試合の内訳".to_string());
+    if analyzed {
+        lines.push(
+            "  (うっかり: 死んだ手を選んだときにまだ助かる道があった / 詰み: どの手でも助からなかった)"
+                .to_string(),
+        );
+    }
+    for c in [NEW, OLD] {
+        let deaths = tally.deaths[c];
+        if deaths == 0 {
+            lines.push(format!("  {}: 衝突 0 試合", LABELS[c]));
+            continue;
+        }
+        let pct = |count: u64| format!("{:.1}%", count as f64 / deaths as f64 * 100.0);
+        let [wall, body, jam] = tally.death_causes[c];
+        lines.push(format!(
+            "  {}: 衝突 {} 試合 / 壁 {} / 自分の体 {} / お邪魔ブロック {} / 衝突したときの平均の長さ {:.1}",
+            LABELS[c],
+            thousands(deaths),
+            thousands(wall),
+            thousands(body),
+            thousands(jam),
+            tally.death_length_sum[c] as f64 / deaths as f64
+        ));
+        if !analyzed {
+            continue;
+        }
+        let [blunder, trapped, unknown] = tally.death_kinds[c];
+        lines.push(format!(
+            "    うっかり {} ({}) / 詰み {} ({}) / 判定できず {} ({})",
+            thousands(blunder),
+            pct(blunder),
+            thousands(trapped),
+            pct(trapped),
+            thousands(unknown),
+            pct(unknown)
+        ));
+        if trapped > 0 {
+            let [one, few, several, many] = tally.trap_moves[c];
+            lines.push(format!(
+                "    詰みに入ったのは: 1 手前 {} / 2〜5 手前 {} / 6〜10 手前 {} / 11 手以上前 {} (平均 {:.1} 手前)",
+                thousands(one),
+                thousands(few),
+                thousands(several),
+                thousands(many),
+                tally.trap_moves_sum[c] as f64 / trapped as f64
+            ));
+        }
+    }
     lines
 }
 
@@ -448,14 +555,26 @@ mod tests {
         let rules = Rules::from_config(&config.game);
         let contenders = [old, new];
 
-        let tally = play(&contenders, rules, 7, 3, 1, Device::Cpu);
+        let tally = play(&contenders, rules, 7, 3, 1, Device::Cpu, true);
         assert_eq!(tally.games, 7);
         assert_eq!(tally.wins[OLD] + tally.wins[NEW] + tally.draws, 7);
         for c in [OLD, NEW] {
             assert_eq!(tally.win_reasons[c].iter().sum::<u64>(), tally.wins[c]);
+            // 衝突した試合はすべて、何に衝突したかと死に方のどれかに数える
+            assert_eq!(tally.death_causes[c].iter().sum::<u64>(), tally.deaths[c]);
+            assert_eq!(tally.death_kinds[c].iter().sum::<u64>(), tally.deaths[c]);
+            assert_eq!(
+                tally.trap_moves[c].iter().sum::<u64>(),
+                tally.death_kinds[c][1]
+            );
         }
         // 同じシードなら同じ結果になる
-        assert_eq!(play(&contenders, rules, 7, 3, 1, Device::Cpu), tally);
+        assert_eq!(play(&contenders, rules, 7, 3, 1, Device::Cpu, true), tally);
+        // 死に方を分析しなければ、死に方だけ数えない
+        let quick = play(&contenders, rules, 7, 3, 1, Device::Cpu, false);
+        assert_eq!(quick.wins, tally.wins);
+        assert_eq!(quick.death_causes, tally.death_causes);
+        assert_eq!(quick.death_kinds, [[0; 3]; CONTENDERS]);
         let (rate, margin) = tally.new_win_rate();
         assert!((0.0..=1.0).contains(&rate) && margin >= 0.0);
         fs::remove_dir_all(dir).unwrap();
@@ -479,7 +598,7 @@ mod tests {
         assert!(old.input_label().contains("盤面 9 チャネル / 状態 13 個"));
         let new = contender(&config, &dir, "new.json");
 
-        let tally = play(&[old, new], rules, 6, 4, 1, Device::Cpu);
+        let tally = play(&[old, new], rules, 6, 4, 1, Device::Cpu, false);
         assert_eq!(tally.games, 6);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -494,7 +613,7 @@ mod tests {
         let b = Contender::load(&a.path, &rules, Device::Cpu).unwrap();
 
         // 同じモデル同士なら、同じ盤面で席を入れ替えた2試合は勝ち負けが入れ替わるだけになる
-        let tally = play(&[a, b], rules, 20, 4, 2, Device::Cpu);
+        let tally = play(&[a, b], rules, 20, 4, 2, Device::Cpu, false);
         assert_eq!(tally.wins[OLD], tally.wins[NEW]);
         assert_eq!(tally.score_sum[OLD], tally.score_sum[NEW]);
         fs::remove_dir_all(dir).unwrap();

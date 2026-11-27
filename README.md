@@ -10,7 +10,7 @@ Human vs AI リアルタイム対戦型スネークゲーム。
   - `recent-model/snake-model-<幅>x<高さ>.json`: 盤面サイズごとの最新モデル。Web アプリはここにある盤面サイズから選べる
   - `previous-model/snake-model-<幅>x<高さ>.json`: main ブランチにある最新モデル (旧モデル)。新モデルとの対戦に使う (git 管理外)
   - `models/`: 盤面サイズとタイムスタンプ付きのバックアップ (git 管理外)
-- `docs/training/`: モデル学習の見直しの説明 ([docs/training/README.md](docs/training/README.md)) と、旧モデルに対する勝率の推移のグラフ (`winrate-<幅>x<高さ>.png`)
+- `docs/training/`: モデル学習の見直しの説明 ([docs/training/README.md](docs/training/README.md)) と、旧モデルに対する勝率の推移のグラフ (`winrate-<幅>x<高さ>.png`)、終盤の戦い方を良くするための提案 ([docs/training/endgame.md](docs/training/endgame.md))
 - `web/`: Vite + React + TypeScriptによるフロントエンドWebアプリ
   - `WEB_TUTORIAL.md`: web/ のコードを教材にした Web アプリ開発入門 (動く場所と通信・設計の選び方・React・Canvas・入力・AI 推論・テスト・公開)
   - `src/game/`: ゲームエンジン (learn と同じルール)
@@ -71,6 +71,8 @@ AI は自分の盤面と状態に加えて、相手の盤面と状態も見ま�
 作業中のブランチでモデルを何度コミットしても、旧モデルは main のモデルのままです。
 `just train`・`just train-resume`・`just versus` を始めるたびに、main のモデルを git から取り出して `model/previous-model/snake-model-<幅>x<高さ>.json` に置き直します。
 使うのは手元の `main` ブランチなので、GitHub で main を更新したときは `git fetch origin main:main` などで手元の main も更新してください。
+main で学習するときは、自動コミットで main のモデルも更新されます。そのため、旧モデルは学習を始めた時点の main のモデルになります。
+自動コミットのあとに `just versus` を実行すると、旧モデルと新モデルが同じモデルになります。比べるときは、`--old` で `model/models/` のバックアップを指定してください。
 main にその盤面サイズのモデルが無いときは、学習は警告を出して続け、`just versus` はエラーで止まります (`--old` で比べる相手を指定すれば対戦できます)。
 
 `just versus` は、旧モデルと最新モデル (新モデル) を AI 同士で対戦させ、どれだけ強くなったかを表示します。
@@ -92,6 +94,8 @@ just versus --old <JSON> --new <JSON>                         # 任意の2つの
   相手の盤面を見ない古い観測のモデルとも比べられます ([learn/RULES.md](learn/RULES.md) の 10 章)。
 - 新モデルの勝率 (引き分けは 0.5 勝) とその 95% 信頼区間、勝ち方の内訳、平均スコアなどを表示し、同じ内容を `log/versus-<日時>.txt` に残します。
   信頼区間が 50% をまたがなければ、どちらが強いかを判定として表示します。
+- 衝突した試合の内訳も表示します。何に衝突したか (壁・自分の体・お邪魔ブロック) と、うっかり (死んだ手を選んだときにまだ助かる道があった) か詰み (どの手でも助からなかった) かです。
+  詰みは、何手前の判断で詰みに入ったかも数えます。判定の決まりは [docs/training/endgame.md](docs/training/endgame.md) にあります。
 
 ## Web アプリ
 公開版: https://24-fuji.github.io/duelsnake-ai/
