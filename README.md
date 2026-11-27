@@ -71,6 +71,8 @@ AI は自分の盤面と状態に加えて、相手の盤面と状態も見ま�
 作業中のブランチでモデルを何度コミットしても、旧モデルは main のモデルのままです。
 `just train`・`just train-resume`・`just versus` を始めるたびに、main のモデルを git から取り出して `model/previous-model/snake-model-<幅>x<高さ>.json` に置き直します。
 使うのは手元の `main` ブランチなので、GitHub で main を更新したときは `git fetch origin main:main` などで手元の main も更新してください。
+main で学習するときは、自動コミットで main のモデルも更新されます。そのため、旧モデルは学習を始めた時点の main のモデルになります。
+自動コミットのあとに `just versus` を実行すると、旧モデルと新モデルが同じモデルになります。比べるときは、`--old` で `model/models/` のバックアップを指定してください。
 main にその盤面サイズのモデルが無いときは、学習は警告を出して続け、`just versus` はエラーで止まります (`--old` で比べる相手を指定すれば対戦できます)。
 
 `just versus` は、旧モデルと最新モデル (新モデル) を AI 同士で対戦させ、どれだけ強くなったかを表示します。
