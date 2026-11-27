@@ -637,6 +637,8 @@ web/
     │   ├── observation.ts  #   盤面 → 入力の数値配列
     │   ├── agent.ts        #   AiPlayer: 観測 → 推論 → 行動
     │   ├── agent.test.ts   #   同梱モデルで最後まで対戦できるかのテスト
+    │   ├── safety.ts       #   安全装置: 衝突する手や袋小路に入る手を避ける (14.5 節)
+    │   ├── safety.test.ts  #   安全装置のテスト
     │   ├── assist.ts       #   難易度: 人が衝突を選んだら AI の判断に差し替えるか (14.6 節)
     │   └── assist.test.ts  #   補助の範囲のテスト
     ├── components/         # 画面 (React) と、画面の手伝い
@@ -2221,7 +2223,7 @@ export function advanceCheatBuffer(buffer, key, names) {
                               │
  GameEnv ──encodeObservation──▶ grid (9×16×16) と vector (13) ──predict──▶ Q 値 (6)
                                                                             │
-                                                                 最大の行動を選ぶ
+                                                     安全装置を通して行動を選ぶ
                                                                             │
                                                                             ▼
                                                                "up" / "boost" / ...
@@ -2234,7 +2236,7 @@ export function advanceCheatBuffer(buffer, key, names) {
 | ルールと観測仕様の一致を確かめる | [src/ai/agent.ts:15-17](src/ai/agent.ts#L15-L17), [src/ai/observation.ts:51-58](src/ai/observation.ts#L51-L58) |
 | 盤面を数値にする (観測) | [src/ai/observation.ts:61-105](src/ai/observation.ts#L61-L105) |
 | 順伝播 (推論) | [src/ai/model.ts:136-158](src/ai/model.ts#L136-L158) |
-| 行動を選ぶ | [src/ai/agent.ts:34-47](src/ai/agent.ts#L34-L47) |
+| 行動を選ぶ | [src/ai/agent.ts:49-64](src/ai/agent.ts#L49-L64), [src/ai/safety.ts](src/ai/safety.ts) |
 | 難易度に応じて人を補助する | [src/ai/assist.ts](src/ai/assist.ts) |
 
 ### 14.2 読み込みと確認
@@ -2351,28 +2353,31 @@ function linear(layer: Dense, input: Float32Array, relu: boolean): Float32Array 
 
 ### 14.5 行動を選ぶ: Q 値
 
-出典: [src/ai/agent.ts:34-47](src/ai/agent.ts#L34-L47)
+出典: [src/ai/agent.ts:49-64](src/ai/agent.ts#L49-L64)
 
 ```ts
 decide(env: GameEnv, player: number): Decision {
   encodeObservation(env, player, this.model.info.observation, this.grid, this.vector);
-  const qValues = this.model.predict(this.grid, this.vector);
+  const qValues = this.model.predict(this.gridInput, this.vectorInput);
   const actions = this.model.info.actions;
 
+  const greedyAction = actions[argmax(qValues)];
   if (Math.random() < this.randomActionRate) {
-    return { action: actions[Math.floor(Math.random() * actions.length)], qValues, random: true };
+    const action = actions[Math.floor(Math.random() * actions.length)];
+    return { action, qValues, random: true, overridden: false, greedyAction };
   }
-  let best = 0;
-  for (let i = 1; i < qValues.length; i++) {
-    if (qValues[i] > qValues[best]) best = i;
+  if (!this.safety) {
+    return { action: greedyAction, qValues, random: false, overridden: false, greedyAction };
   }
-  return { action: actions[best], qValues, random: false };
+  const choice = chooseSafely(env.fields[player], env.rules, actions, qValues);
+  return { action: actions[choice.index], qValues, random: false, overridden: choice.overridden, greedyAction };
 }
 ```
 
 - Q 値は「その行動をとったら、この先どれくらい得をするか」の見積もりです。一番大きいものを選べば、AI にとって最善の手です。
 - `randomActionRate` の確率で、わざとランダムな行動をとらせることもできます。ランダムな行動のときも Q 値は計算しておき、画面の表に出せば「AI は本当はこうしたかった」が見えます。
-- ただし今の Web 版はこの確率をいつも 0 にしていて、AI はいつも最善の手を選びます。モデル JSON の `difficulty` にも `random_action_rate` が入っていますが、Web 版は難易度の名前 (`easy`・`medium`・`hard`) だけを使います。難易度の作り方は次の節で見ます。
+- ただし今の Web 版はこの確率をいつも 0 にしていて、AI はいつも最善の手を選びます。
+- 最後に、安全装置 ([src/ai/safety.ts](src/ai/safety.ts)) が Q 値の見積もりの外れを手書きのルールで補います。行動ごとに次の移動の行き先を「助かる・判定できず・詰み・衝突」の 4 段階に分け、いちばん良い段階の中から Q 値が最大の行動を選びます。「助かる」は、体が尻尾から順に空いていくことを考えて、今の体がすべて退くまで動き続けられる経路が見つかることです。決まりの詳しい説明は [learn/RULES.md](../learn/RULES.md) の 10 章にあります。モデル JSON の `difficulty` にも `random_action_rate` が入っていますが、Web 版は難易度の名前 (`easy`・`medium`・`hard`) だけを使います。難易度の作り方は次の節で見ます。
 
 ### 14.6 難易度: 人の操作を補助する
 

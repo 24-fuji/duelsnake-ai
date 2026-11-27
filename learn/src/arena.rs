@@ -10,6 +10,7 @@ use crate::env::rules::Rules;
 use crate::export::{self, ModelFile, TrainingInfo};
 use crate::model::{NetworkSpec, QNetwork};
 use crate::monitor::{hms, thousands, StatusLine};
+use crate::safety;
 use crate::trap::{self, DeathKind, Snapshot};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -30,6 +31,8 @@ pub struct Contender {
     pub created_at: String,
     /// モデルを学習したときのゲームルール。対戦は config.yaml のルールで行う
     pub game: GameConfig,
+    /// 推論時の安全装置 (`safety`) を通して行動を選ぶか
+    pub safety: bool,
     spec: NetworkSpec,
     net: QNetwork,
     _vs: nn::VarStore,
@@ -86,6 +89,7 @@ impl Contender {
             training: model.training,
             created_at: model.created_at,
             game: model.game,
+            safety: false,
             spec,
             net,
             _vs: vs,
@@ -111,14 +115,19 @@ impl Contender {
         } else {
             "、観測の先頭部分だけを使う古いモデル"
         };
+        let safety = if self.safety {
+            " / 安全装置あり"
+        } else {
+            ""
+        };
         format!(
-            "入力: 盤面 {} チャネル / 状態 {} 個{note}",
+            "入力: 盤面 {} チャネル / 状態 {} 個{note}{safety}",
             s.grid_channels, s.vector_features
         )
     }
 
-    /// 観測をまとめて推論し、Q 値が最大の行動を返す
-    fn best_actions(&self, grids: &[f32], vectors: &[f32], device: Device) -> Vec<usize> {
+    /// 観測をまとめて推論し、局面ごとの Q 値 (Action::ALL の順) を返す
+    fn q_values(&self, grids: &[f32], vectors: &[f32], device: Device) -> Vec<Vec<f32>> {
         let s = &self.spec;
         let n = (vectors.len() as i64) / s.vector_features;
         let grid = Tensor::from_slice(grids)
@@ -127,12 +136,9 @@ impl Contender {
         let vector = Tensor::from_slice(vectors)
             .view([n, s.vector_features])
             .to(device);
-        let best = tch::no_grad(|| self.net.forward(&grid, &vector).argmax(1, false));
-        Vec::<i64>::try_from(best.to(Device::Cpu))
-            .expect("行動の取り出しに失敗")
-            .into_iter()
-            .map(|a| a as usize)
-            .collect()
+        let q = tch::no_grad(|| self.net.forward(&grid, &vector)).to(Device::Cpu);
+        let q = Vec::<f32>::try_from(q.flatten(0, -1)).expect("Q 値の取り出しに失敗");
+        q.chunks(Action::COUNT).map(<[f32]>::to_vec).collect()
     }
 }
 
@@ -163,6 +169,9 @@ pub struct Tally {
     /// 詰みに入ったのが何手前か [1, 2〜5, 6〜10, 11 以上]
     pub trap_moves: [[u64; 4]; CONTENDERS],
     pub trap_moves_sum: [u64; CONTENDERS],
+    /// 安全装置を通して選んだ判断の回数と、そのうち Q 値が最大の行動を差し替えた回数
+    pub safety_decisions: [u64; CONTENDERS],
+    pub safety_overrides: [u64; CONTENDERS],
     pub score_sum: [i64; CONTENDERS],
     pub length_sum: [u64; CONTENDERS],
     pub ticks_sum: u64,
@@ -320,8 +329,17 @@ pub fn play(
                 grids.extend_from_slice(&full_grid[..cg]);
                 vectors.extend_from_slice(&full_vector[..cv]);
             }
-            let best = contender.best_actions(&grids, &vectors, device);
-            for (&(m, p), a) in requests.iter().zip(best) {
+            let q_values = contender.q_values(&grids, &vectors, device);
+            for (&(m, p), q) in requests.iter().zip(q_values) {
+                let a = if contender.safety {
+                    let env = &matches[m].env;
+                    let choice = safety::choose(&env.fields[p], env.rules(), &q);
+                    tally.safety_decisions[c] += 1;
+                    tally.safety_overrides[c] += u64::from(choice.overridden);
+                    choice.action
+                } else {
+                    safety::argmax(&q)
+                };
                 actions[m][p] = Some(Action::from_index(a));
             }
         }
@@ -423,6 +441,19 @@ pub fn report(contenders: &[Contender; CONTENDERS], tally: &Tally) -> Vec<String
         "  平均試合時間: {:.1} ティック",
         tally.ticks_sum as f64 / n
     ));
+    for c in [NEW, OLD] {
+        let decisions = tally.safety_decisions[c];
+        if decisions > 0 {
+            let overrides = tally.safety_overrides[c];
+            lines.push(format!(
+                "  {}の安全装置: {} 回の判断のうち {} 回 ({:.2}%) で Q 値が最大の行動を差し替えた",
+                LABELS[c],
+                thousands(decisions),
+                thousands(overrides),
+                overrides as f64 / decisions as f64 * 100.0
+            ));
+        }
+    }
     lines.extend(death_report(tally));
     lines
 }
@@ -600,6 +631,32 @@ mod tests {
 
         let tally = play(&[old, new], rules, 6, 4, 1, Device::Cpu, false);
         assert_eq!(tally.games, 6);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn safety_reduces_deaths_of_the_same_model() {
+        tch::manual_seed(7);
+        let config = config();
+        let dir = temp_dir();
+        let rules = Rules::from_config(&config.game);
+        let old = contender(&config, &dir, "a.json");
+        let mut new = Contender::load(&old.path, &rules, Device::Cpu).unwrap();
+        new.safety = true;
+        assert!(new.input_label().contains("安全装置あり"));
+
+        // 乱数の重みのモデルはすぐ衝突するが、安全装置を通せば衝突がずっと減る
+        let tally = play(&[old, new], rules, 20, 4, 3, Device::Cpu, true);
+        assert_eq!(tally.safety_decisions[OLD], 0);
+        assert!(tally.safety_decisions[NEW] > 0);
+        assert!(tally.safety_overrides[NEW] > 0);
+        assert!(tally.safety_overrides[NEW] <= tally.safety_decisions[NEW]);
+        assert!(
+            tally.deaths[NEW] < tally.deaths[OLD],
+            "{:?} {:?}",
+            tally.deaths,
+            tally.death_kinds
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
