@@ -9,6 +9,7 @@ mod monitor;
 mod progress;
 mod replay;
 mod trainer;
+mod trap;
 
 use arena::{Contender, CONTENDERS, NEW, OLD};
 use clap::{Args, Parser, Subcommand};
@@ -444,7 +445,7 @@ fn versus(args: VersusArgs) -> Result<(), Box<dyn std::error::Error>> {
                 ));
             }
         }
-        let tally = arena::play(&contenders, rules, args.games, envs, seed, device);
+        let tally = arena::play(&contenders, rules, args.games, envs, seed, device, true);
         section.extend(arena::report(&contenders, &tally));
         for line in &section {
             println!("{line}");

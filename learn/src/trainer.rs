@@ -362,7 +362,15 @@ impl Trainer {
         };
         let started = Instant::now();
         let envs = self.config.train.num_envs;
-        let tally = arena::play(&contenders, self.rules, games, envs, EVAL_SEED, self.device);
+        let tally = arena::play(
+            &contenders,
+            self.rules,
+            games,
+            envs,
+            EVAL_SEED,
+            self.device,
+            false,
+        );
         let (rate, margin) = tally.new_win_rate();
         let n = tally.games.max(1) as f64;
         let old = &contenders[OLD];
