@@ -85,6 +85,9 @@ function QValueTable({ decision, actions }: { decision: Decision | null; actions
       <p>
         直近の判断: <strong>{ACTION_LABELS[decision.action]}</strong>
         {decision.random && <span className="random"> (ランダム行動)</span>}
+        {decision.overridden && (
+          <span className="random"> (安全装置で「{ACTION_LABELS[decision.greedyAction]}」から差し替え)</span>
+        )}
       </p>
       <table>
         <tbody>

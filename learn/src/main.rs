@@ -8,11 +8,12 @@ mod model;
 mod monitor;
 mod progress;
 mod replay;
+mod safety;
 mod trainer;
 mod trap;
 
 use arena::{Contender, CONTENDERS, NEW, OLD};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use config::Config;
 use env::observation::{GRID_CHANNELS, VECTOR_FEATURES};
 use env::rules::Rules;
@@ -97,6 +98,13 @@ struct VersusArgs {
     /// 指定すると、--size が無ければこのモデルの盤面だけで対戦する
     #[arg(long, value_name = "MODEL_JSON")]
     new: Option<PathBuf>,
+    /// 制限時間 (秒)。config.yaml の game.grid.time_limit_seconds の代わりに使う。
+    /// 制限時間を延ばしたときの終盤 (体が長くなってからの生き残り合い) を、学習し直さずに比べるときに使う
+    #[arg(long, value_name = "SECONDS", value_parser = parse_time_limit)]
+    time_limit: Option<f32>,
+    /// 推論時の安全装置 (次の移動で衝突する手や、体が退くまで動き続けられない手を避ける) を付けるモデル
+    #[arg(long, value_enum, default_value_t = SafetyFor::None)]
+    safety: SafetyFor,
     /// 1つの盤面での対戦数。同じ盤面で先手と後手を入れ替えて 2 試合ずつ行うので偶数がよい
     #[arg(long, default_value_t = 1000)]
     games: u64,
@@ -115,6 +123,31 @@ struct VersusArgs {
     /// モデルの置き場所 [既定: model/]
     #[arg(long)]
     out_dir: Option<PathBuf>,
+}
+
+/// 安全装置を付けるモデル
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum SafetyFor {
+    /// どちらにも付けない
+    None,
+    /// 旧モデルだけ
+    Old,
+    /// 新モデルだけ
+    New,
+    /// 両方
+    Both,
+}
+
+impl SafetyFor {
+    /// [旧モデル, 新モデル] のそれぞれに付けるか
+    fn seats(self) -> [bool; CONTENDERS] {
+        match self {
+            SafetyFor::None => [false, false],
+            SafetyFor::Old => [true, false],
+            SafetyFor::New => [false, true],
+            SafetyFor::Both => [true, true],
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -358,7 +391,10 @@ fn save_branch_model_as_previous(out_dir: &Path, model_file: &str) -> Result<Pat
 /// 盤面を指定しなければ、旧モデル (main) と新モデルがそろうすべての盤面で対戦する
 fn versus(args: VersusArgs) -> Result<(), Box<dyn std::error::Error>> {
     let (config_path, out_dir) = resolve_paths(args.config, args.out_dir);
-    let config = Config::load(&config_path)?;
+    let mut config = Config::load(&config_path)?;
+    if let Some(seconds) = args.time_limit {
+        config.game.grid.time_limit_seconds = seconds;
+    }
     let mut lines = Vec::new();
     let sizes = match (args.size, args.new.as_ref().or(args.old.as_ref())) {
         (Some(size), _) => vec![size],
@@ -391,9 +427,15 @@ fn versus(args: VersusArgs) -> Result<(), Box<dyn std::error::Error>> {
     lines.insert(
         0,
         format!(
-            "DuelSnake-AI 旧モデル vs 新モデル (盤面 {} / 各 {} 試合 / デバイス {device:?} / スレッド {threads} / 同時対戦 {envs} / シード {seed})",
+            "DuelSnake-AI 旧モデル vs 新モデル (盤面 {} / 各 {} 試合 / 制限時間 {} 秒{} / デバイス {device:?} / スレッド {threads} / 同時対戦 {envs} / シード {seed})",
             sizes.iter().map(|&s| size_text(s)).collect::<Vec<_>>().join(", "),
-            thousands(args.games)
+            thousands(args.games),
+            config.game.grid.time_limit_seconds,
+            if args.time_limit.is_some() {
+                " (--time-limit で指定)"
+            } else {
+                ""
+            }
         ),
     );
     for line in &lines {
@@ -434,12 +476,26 @@ fn versus(args: VersusArgs) -> Result<(), Box<dyn std::error::Error>> {
             .new
             .clone()
             .unwrap_or_else(|| out_dir.join(RECENT_DIR).join(&model_file));
-        let contenders: [Contender; CONTENDERS] = [
+        let mut contenders: [Contender; CONTENDERS] = [
             Contender::load(&old, &rules, device)?,
             Contender::load(&new, &rules, device)?,
         ];
+        for (contender, safety) in contenders.iter_mut().zip(args.safety.seats()) {
+            contender.safety = safety;
+        }
         for (c, label) in [(OLD, "旧モデル"), (NEW, "新モデル")] {
-            if contenders[c].game != game {
+            let trained = &contenders[c].game;
+            if args.time_limit.is_some()
+                && trained.grid.time_limit_seconds != game.grid.time_limit_seconds
+            {
+                section.push(format!(
+                    "注意: {label}は制限時間 {} 秒で学習したモデルです。残り時間の入力 (time_remaining) は {} 秒で 1 から 0 まで減ります",
+                    trained.grid.time_limit_seconds, game.grid.time_limit_seconds
+                ));
+            }
+            let mut trained = trained.clone();
+            trained.grid.time_limit_seconds = game.grid.time_limit_seconds;
+            if trained != game {
                 section.push(format!(
                     "注意: {label}を学習したときのゲームルールが config.yaml と異なります。config.yaml のルールで対戦します"
                 ));
@@ -481,6 +537,14 @@ fn parse_size(text: &str) -> Result<(i32, i32), String> {
         None => number(text).map(|n| (n, n)),
     };
     size.ok_or_else(|| format!("盤面は 8-8 や 12-10 の形で指定してください: {text}"))
+}
+
+/// 制限時間の指定 (秒)。1 ティック以上の正の値
+fn parse_time_limit(text: &str) -> Result<f32, String> {
+    match text.trim().parse::<f32>() {
+        Ok(seconds) if seconds.is_finite() && seconds > 0.0 => Ok(seconds),
+        _ => Err(format!("制限時間は正の秒数で指定してください: {text}")),
+    }
 }
 
 /// 画面とログに出す盤面の大きさ (例: 8-8)
@@ -595,6 +659,15 @@ mod tests {
         assert_eq!(size_text((12, 10)), "12-10");
         for bad in ["", "-8", "8-", "0-8", "8-8-8", "x8", "8x", "8x8x8", "abc"] {
             assert!(parse_size(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parses_time_limits() {
+        assert_eq!(parse_time_limit("120"), Ok(120.0));
+        assert_eq!(parse_time_limit("30.5"), Ok(30.5));
+        for bad in ["", "0", "-30", "abc", "inf", "NaN"] {
+            assert!(parse_time_limit(bad).is_err(), "{bad}");
         }
     }
 }

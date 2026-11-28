@@ -19,6 +19,9 @@ const DIRECTIONS: [Direction; 4] = [
 
 /// 1回の判定で調べる局面の数の上限。越えたら「判定できず」にする
 const SEARCH_BUDGET: usize = 200_000;
+/// 推論時の安全装置 (`safety`) が 1 つの手を調べる局面の数の上限。
+/// Web 版でも毎回の判断で同じ探索をするので、死に方の分析より小さく抑える
+pub const SAFETY_BUDGET: usize = 2_000;
 
 /// 衝突したもの
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,76 +115,150 @@ pub fn classify(history: &[Snapshot], width: i32, height: i32) -> DeathKind {
 
 /// 今の体がすべて退くまで動き続けられる経路があるか
 pub fn escape(snapshot: &Snapshot, width: i32, height: i32) -> Escape {
-    let cells = (width * height) as usize;
-    let len = snapshot.body.len() as u32;
-    let growth = snapshot.pending_growth;
-    // free_at[i] は、マス i に入れるようになる移動の番号 (1 手目が 1)。0 は最初から空き
-    let mut free_at = vec![0u32; cells];
-    for &pos in &snapshot.obstacles {
-        free_at[index(pos, width)] = u32::MAX;
-    }
-    // 頭から i 番目の体は、伸びる予定の分だけ尻尾が止まったあと、尻尾から順に退く
-    for (i, &pos) in snapshot.body.iter().enumerate() {
-        free_at[index(pos, width)] = growth + len - i as u32;
-    }
-    let mut goal = growth + len;
-    // 伸びている途中で盤面が埋まれば勝ちなので、そこまで動ければよい
-    let fill_at = (cells as u32)
-        .saturating_sub(snapshot.obstacles.len() as u32)
-        .saturating_sub(len);
-    if fill_at <= growth {
-        goal = goal.min(fill_at);
-    }
+    let mut search = Search::new(snapshot, width, height, SEARCH_BUDGET);
+    let head = search.cell(snapshot.body[0]);
+    Escape::from(search.run(head, snapshot.last_moved_dir, 0))
+}
 
-    let mut search = Search {
-        width,
-        height,
-        goal,
-        free_at,
-        on_path: vec![false; cells],
-        seen: vec![false; cells],
-        queue: Vec::with_capacity(cells),
-        nodes: 0,
+/// 最初の一手を `first` に進んだうえで、今の体がすべて退くまで動き続けられる経路があるか。
+/// 最初の一手で衝突するなら Trapped。調べる局面は `budget` までで、越えたら Unknown
+pub fn escape_by(
+    snapshot: &Snapshot,
+    width: i32,
+    height: i32,
+    first: Direction,
+    budget: usize,
+) -> Escape {
+    let mut search = Search::new(snapshot, width, height, budget);
+    let head = search.cell(snapshot.body[0]);
+    if first == snapshot.last_moved_dir.opposite() {
+        return Escape::Trapped;
+    }
+    let Some(next) = search
+        .neighbor(head, first)
+        .filter(|&n| search.can_enter(n, 1))
+    else {
+        return Escape::Trapped;
     };
-    match search.run(snapshot.body[0], snapshot.last_moved_dir, 0) {
-        Some(true) => Escape::Open,
-        Some(false) => Escape::Trapped,
-        None => Escape::Unknown,
+    if search.traces_body(next) {
+        return Escape::Open;
+    }
+    search.on_path[next] = true;
+    Escape::from(search.run(next, first, 1))
+}
+
+impl Escape {
+    fn from(found: Option<bool>) -> Self {
+        match found {
+            Some(true) => Escape::Open,
+            Some(false) => Escape::Trapped,
+            None => Escape::Unknown,
+        }
     }
 }
 
-fn index(pos: Position, width: i32) -> usize {
-    (pos.y * width + pos.x) as usize
-}
+/// 体でないマスの `body_index`
+const NOT_BODY: usize = usize::MAX;
 
+/// 経路の探索。マスは y * 幅 + x の番号で扱う
 struct Search {
     width: i32,
     height: i32,
     goal: u32,
+    /// free_at[i] は、マス i に入れるようになる移動の番号 (1 手目が 1)。0 は最初から空き
     free_at: Vec<u32>,
+    /// 今の体のマスの番号 (先頭が頭)
+    body: Vec<usize>,
+    /// body_index[i] は、マス i が頭から何番目の体か。体でなければ NOT_BODY
+    body_index: Vec<usize>,
     /// 探索中の経路で通ったマス。経路は新しい体になり、goal 手までは退かない
     on_path: Vec<bool>,
-    seen: Vec<bool>,
-    queue: Vec<Position>,
+    /// 行けるマスを数えるときに、数えたマスへ付ける印。数えるたびに `stamp` を 1 増やすので、消さずに使い回せる
+    seen: Vec<u32>,
+    stamp: u32,
+    stack: Vec<usize>,
     nodes: usize,
+    budget: usize,
 }
 
 impl Search {
-    fn in_bounds(&self, pos: Position) -> bool {
-        pos.x >= 0 && pos.x < self.width && pos.y >= 0 && pos.y < self.height
+    fn new(snapshot: &Snapshot, width: i32, height: i32, budget: usize) -> Self {
+        let cells = (width * height) as usize;
+        let len = snapshot.body.len() as u32;
+        let growth = snapshot.pending_growth;
+        let cell = |p: Position| (p.y * width + p.x) as usize;
+        let mut free_at = vec![0u32; cells];
+        for &pos in &snapshot.obstacles {
+            free_at[cell(pos)] = u32::MAX;
+        }
+        // 頭から i 番目の体は、伸びる予定の分だけ尻尾が止まったあと、尻尾から順に退く
+        let body: Vec<usize> = snapshot.body.iter().map(|&p| cell(p)).collect();
+        let mut body_index = vec![NOT_BODY; cells];
+        for (i, &c) in body.iter().enumerate() {
+            free_at[c] = growth + len - i as u32;
+            body_index[c] = i;
+        }
+        let mut goal = growth + len;
+        // 伸びている途中で盤面が埋まれば勝ちなので、そこまで動ければよい
+        let fill_at = (cells as u32)
+            .saturating_sub(snapshot.obstacles.len() as u32)
+            .saturating_sub(len);
+        if fill_at <= growth {
+            goal = goal.min(fill_at);
+        }
+        Self {
+            width,
+            height,
+            goal,
+            free_at,
+            body,
+            body_index,
+            on_path: vec![false; cells],
+            seen: vec![0; cells],
+            stamp: 0,
+            stack: Vec::with_capacity(cells),
+            nodes: 0,
+            budget,
+        }
     }
 
-    /// `moves` 手動いて頭が `head` にあるところから、goal 手まで動き続けられるか。上限を越えたら None
-    fn run(&mut self, head: Position, last_dir: Direction, moves: u32) -> Option<bool> {
+    fn cell(&self, pos: Position) -> usize {
+        (pos.y * self.width + pos.x) as usize
+    }
+
+    /// マス `i` の `dir` 側の隣。盤の外なら None
+    fn neighbor(&self, i: usize, dir: Direction) -> Option<usize> {
+        let (x, y) = ((i as i32) % self.width, (i as i32) / self.width);
+        let (dx, dy) = dir.delta();
+        let (nx, ny) = (x + dx, y + dy);
+        (nx >= 0 && nx < self.width && ny >= 0 && ny < self.height)
+            .then(|| (ny * self.width + nx) as usize)
+    }
+
+    /// `moves` 手目の移動でマス `i` に入れるか
+    fn can_enter(&self, i: usize, moves: u32) -> bool {
+        !self.on_path[i] && self.free_at[i] <= moves
+    }
+
+    /// 入ったマス `i` が今の体のマスなら、そこから体を頭までなぞれば goal 手まで動き続けられるか。
+    /// 頭から b 番目の体のマスに、そのマスが空いた手以降に入れたなら、b - 1 番目、b - 2 番目 … も
+    /// ちょうど空いた手に入れる。なぞるマスがまだ経路で通っていなければ、頭のマスに着く手は goal 以上になる
+    fn traces_body(&self, i: usize) -> bool {
+        let b = self.body_index[i];
+        b != NOT_BODY && self.body[..b].iter().all(|&c| !self.on_path[c])
+    }
+
+    /// `moves` 手動いて頭がマス `head` にあるところから、goal 手まで動き続けられるか。上限を越えたら None
+    fn run(&mut self, head: usize, last_dir: Direction, moves: u32) -> Option<bool> {
         if moves >= self.goal {
             return Some(true);
         }
         self.nodes += 1;
-        if self.nodes > SEARCH_BUDGET {
+        if self.nodes > self.budget {
             return None;
         }
         // 経路は同じマスを通れないので、行けるマスが残りの手数より少なければ届かない
-        if self.reachable(head) < (self.goal - moves) as usize {
+        if !self.has_room(head, (self.goal - moves) as usize) {
             return Some(false);
         }
         for dir in DIRECTIONS {
@@ -189,17 +266,18 @@ impl Search {
             if dir == last_dir.opposite() {
                 continue;
             }
-            let next = head.step(dir);
-            if !self.in_bounds(next) {
+            let Some(next) = self.neighbor(head, dir) else {
+                continue;
+            };
+            if !self.can_enter(next, moves + 1) {
                 continue;
             }
-            let i = index(next, self.width);
-            if self.on_path[i] || self.free_at[i] > moves + 1 {
-                continue;
+            if self.traces_body(next) {
+                return Some(true);
             }
-            self.on_path[i] = true;
+            self.on_path[next] = true;
             let found = self.run(next, dir, moves + 1);
-            self.on_path[i] = false;
+            self.on_path[next] = false;
             if found != Some(false) {
                 return found;
             }
@@ -207,28 +285,36 @@ impl Search {
         Some(false)
     }
 
-    /// `head` から、経路とお邪魔ブロックを避けて行けるマスの数 (goal 手までに空かない体のマスも除く)
-    fn reachable(&mut self, head: Position) -> usize {
-        self.seen.fill(false);
-        self.queue.clear();
-        self.queue.push(head);
+    /// `head` から、経路とお邪魔ブロックを避けて行けるマス (goal 手までに空かない体のマスも除く) が `need` 以上あるか。
+    /// `need` に届いた時点で数えるのをやめる
+    fn has_room(&mut self, head: usize, need: usize) -> bool {
+        if need == 0 {
+            return true;
+        }
+        self.stamp += 1;
+        self.stack.clear();
+        self.stack.push(head);
         let mut count = 0;
-        while let Some(pos) = self.queue.pop() {
+        while let Some(i) = self.stack.pop() {
             for dir in DIRECTIONS {
-                let next = pos.step(dir);
-                if !self.in_bounds(next) {
+                let Some(next) = self.neighbor(i, dir) else {
+                    continue;
+                };
+                if self.seen[next] == self.stamp
+                    || self.on_path[next]
+                    || self.free_at[next] > self.goal
+                {
                     continue;
                 }
-                let i = index(next, self.width);
-                if self.seen[i] || self.on_path[i] || self.free_at[i] > self.goal {
-                    continue;
-                }
-                self.seen[i] = true;
+                self.seen[next] = self.stamp;
                 count += 1;
-                self.queue.push(next);
+                if count >= need {
+                    return true;
+                }
+                self.stack.push(next);
             }
         }
-        count
+        false
     }
 }
 
@@ -238,6 +324,7 @@ mod tests {
     use crate::config::Config;
     use crate::env::game::GameEnv;
     use crate::env::snake::Snake;
+    use rand::Rng;
     use std::path::Path;
 
     fn pos(x: i32, y: i32) -> Position {
@@ -298,6 +385,134 @@ mod tests {
         // 伸びる予定が 2 なら、1 手目で盤面が埋まる
         let s = snapshot(&[(0, 0), (1, 0), (1, 1)], Direction::Left, 2, &[]);
         assert_eq!(escape(&s, 2, 2), Escape::Open);
+    }
+
+    #[test]
+    fn escape_by_checks_the_given_first_move() {
+        // 上に進むと 2 マスの袋小路 (長さ 5 の体が退くまで動けない)。右に進めば広い
+        let s = snapshot(
+            &[(0, 2), (0, 3), (0, 4), (1, 4), (2, 4)],
+            Direction::Up,
+            0,
+            &[(1, 1), (1, 0)],
+        );
+        assert_eq!(escape_by(&s, 5, 5, Direction::Up, 1000), Escape::Trapped);
+        assert_eq!(escape_by(&s, 5, 5, Direction::Right, 1000), Escape::Open);
+        // 壁・逆走は最初の一手で衝突する
+        assert_eq!(escape_by(&s, 5, 5, Direction::Left, 1000), Escape::Trapped);
+        assert_eq!(escape_by(&s, 5, 5, Direction::Down, 1000), Escape::Trapped);
+        // どれかの手で助かれば、escape も助かると判定する
+        assert_eq!(escape(&s, 5, 5), Escape::Open);
+        // 上限を越えたら判定できず
+        assert_eq!(escape_by(&s, 5, 5, Direction::Right, 1), Escape::Unknown);
+    }
+
+    /// 枝刈りも近道もしない総当たりで、goal 手まで動き続けられるか
+    fn brute_force(s: &Snapshot, width: i32, height: i32, first: Option<Direction>) -> bool {
+        let search = Search::new(s, width, height, usize::MAX);
+        fn go(
+            search: &mut Search,
+            head: usize,
+            last: Direction,
+            moves: u32,
+            only: Option<Direction>,
+        ) -> bool {
+            if moves >= search.goal {
+                return true;
+            }
+            for dir in DIRECTIONS {
+                if dir == last.opposite() || only.is_some_and(|d| d != dir) {
+                    continue;
+                }
+                let Some(next) = search.neighbor(head, dir) else {
+                    continue;
+                };
+                if !search.can_enter(next, moves + 1) {
+                    continue;
+                }
+                search.on_path[next] = true;
+                let found = go(search, next, dir, moves + 1, None);
+                search.on_path[next] = false;
+                if found {
+                    return true;
+                }
+            }
+            false
+        }
+        let mut search = search;
+        let head = search.cell(s.body[0]);
+        go(&mut search, head, s.last_moved_dir, 0, first)
+    }
+
+    /// 乱数で歩かせたヘビと、空いたマスに置いたお邪魔ブロック
+    fn random_snapshot(rng: &mut impl rand::Rng, width: i32, height: i32) -> Option<Snapshot> {
+        let len = rng.gen_range(2..=(width * height - 2) as usize);
+        let mut walk = vec![pos(rng.gen_range(0..width), rng.gen_range(0..height))];
+        let mut dirs = Vec::new();
+        while walk.len() < len {
+            let last = *walk.last().unwrap();
+            let options: Vec<Direction> = DIRECTIONS
+                .into_iter()
+                .filter(|&d| {
+                    let n = last.step(d);
+                    n.x >= 0 && n.x < width && n.y >= 0 && n.y < height && !walk.contains(&n)
+                })
+                .collect();
+            if options.is_empty() {
+                break;
+            }
+            let d = options[rng.gen_range(0..options.len())];
+            walk.push(last.step(d));
+            dirs.push(d);
+        }
+        let last_moved_dir = *dirs.last()?;
+        walk.reverse();
+        let mut obstacles = Vec::new();
+        for _ in 0..rng.gen_range(0..3) {
+            let p = pos(rng.gen_range(0..width), rng.gen_range(0..height));
+            if !walk.contains(&p) && !obstacles.contains(&p) {
+                obstacles.push(p);
+            }
+        }
+        // 盤面がもう埋まっている局面は、試合が終わっているので調べない
+        if walk.len() + obstacles.len() >= (width * height) as usize {
+            return None;
+        }
+        Some(Snapshot {
+            body: walk,
+            pending_growth: rng.gen_range(0..3),
+            last_moved_dir,
+            obstacles,
+        })
+    }
+
+    #[test]
+    fn matches_brute_force_on_small_boards() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let (mut open, mut trapped) = (0, 0);
+        for _ in 0..3000 {
+            let (w, h) = (rng.gen_range(3..=5), rng.gen_range(3..=5));
+            let Some(s) = random_snapshot(&mut rng, w, h) else {
+                continue;
+            };
+            let expected = brute_force(&s, w, h, None);
+            let actual = escape(&s, w, h);
+            assert_eq!(actual == Escape::Open, expected, "{s:?} {w}x{h}");
+            assert_ne!(actual, Escape::Unknown);
+            if expected {
+                open += 1;
+            } else {
+                trapped += 1;
+            }
+            for dir in DIRECTIONS {
+                let expected = brute_force(&s, w, h, Some(dir));
+                let actual = escape_by(&s, w, h, dir, usize::MAX);
+                assert_eq!(actual == Escape::Open, expected, "{s:?} {w}x{h} {dir:?}");
+            }
+        }
+        // 助かる局面と詰みの局面の両方を十分に調べている
+        assert!(open > 300 && trapped > 300, "{open} {trapped}");
     }
 
     #[test]
